@@ -44,7 +44,7 @@ TX2_ID = "todo: look me up"
 XAVIER_ID = "P2888"
 
 # Currently only Jetson Nano supported (Xavier next)
-SUPPORTED_IDS = NANO_IDS
+SUPPORTED_IDS = {NANO_DEV_ID}
 
 MODEL_NAME_MAP = {
     XAVIER_ID: "Jetson Xavier",
@@ -109,7 +109,7 @@ def get_bundles(conn: sqlite3.Connection) -> List[sqlite3.Row]:
     if not bundles:
         raise RuntimeError(
             f"No bundles found. {tegrity.err.BUNDLE_REINSTALL}")
-    return bundles
+    return [bundle for bundle in bundles if bundle['targetHW'] in SUPPORTED_IDS]
 
 
 def get_l4t_path(bundle: sqlite3.Row):

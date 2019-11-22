@@ -39,6 +39,12 @@ import tegrity
 
 logger = logging.getLogger(__name__)
 
+__all__ = [
+    'download',
+    'extract',
+    'verify',
+]
+
 
 def download(url: Text,
              path: str,
@@ -127,6 +133,7 @@ def extract(file_or_url: str,
             return member_list
 
 
+# noinspection PyUnresolvedReferences
 def verify(file: Union[str, os.PathLike],
            hexdigest: str,
            hasher: Callable,

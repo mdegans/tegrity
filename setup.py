@@ -9,7 +9,7 @@ with open(os.path.join(THIS_DIR, 'README.md')) as readme:
 
 setuptools.setup(
     name='tegrity',
-    version='0.0.1',
+    version='0.0.2',
     description='Helps bake system images for NVIDIA Tegra',
     long_description=long_description,
     long_description_content_type='text/markdown',

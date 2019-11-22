@@ -18,10 +18,14 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
+# todo: add more errors from random files to here, combine similar ones
+
 __all__ = [
-    'NO_SDKM',
     'BUNDLE_REINSTALL',
+    'InSanityError',
+    'InTegrityError',
     'INVALID_NUMBER',
+    'NO_SDKM',
     'TOOLCHAIN_TRY_APT',
 ]
 

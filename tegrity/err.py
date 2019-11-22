@@ -18,6 +18,13 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
+__all__ = [
+    'NO_SDKM',
+    'BUNDLE_REINSTALL',
+    'INVALID_NUMBER',
+    'TOOLCHAIN_TRY_APT',
+]
+
 NO_SDKM = "Is NVIDIA SDK Manager installed?"
 BUNDLE_REINSTALL = "Please try reinstalling your target board's bundle with" \
                    " SDK Manager."

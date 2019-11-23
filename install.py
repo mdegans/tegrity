@@ -10,7 +10,7 @@ PIP3 = '/usr/bin/pip3'
 
 
 def install(prefix=None):
-    """installs tegrity using pip3 to /usr/local/"""
+    """installs tegrity using pip3 to prefix"""
     logger.info(f"Installing {tegrity.__name__}")
     ensure_system_requirements()
     this_dir = os.path.dirname(__file__)

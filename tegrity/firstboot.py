@@ -43,28 +43,15 @@ THIS_DIR = os.path.dirname(THIS_SCRIPT_ABSPATH)
 
 MAX_FIRST_BOOT_SCRIPTS = 999
 SCRIPT_FOLDER_NAME = 'tegrity_fb'
-
 SCRIPT_MODE = 0o755
 # sometimes logs leave sensitive information in full view. It's best to leave
 # this as the default just in case your first boot scripts are spitting out
 # something sensitive.
 LOG_MODE = 0o600
 
-SERVICE_TEMPLATE = """# Tegrity First Boot Service
-[Unit]
-Description="Tegrity First Boot Service"
-DefaultDependencies=no
-Conflicts=shutdown.target
-After={after}
-Before={before}
-ConditionPathIsReadWrite=/etc
-ConditionFirstBoot=yes
-
-[Service]
-Type=oneshot
-RemainAfterExit=yes
-ExecStart={execstart}
-"""
+SERVICE_TEMPLATE_FILE = os.path.join(THIS_DIR, 'tegrity-firstboot.service.in')
+with open(SERVICE_TEMPLATE_FILE) as f:
+    SERVICE_TEMPLATE = f.read()
 
 
 def create_service_template(after: str, before: str, execstart: str):

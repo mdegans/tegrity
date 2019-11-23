@@ -30,6 +30,12 @@ setuptools.setup(
     python_requires='>=3.6',
     install_requires=None,
     packages=['tegrity'],
+    package_data={
+        'tegrity': [
+            'tegrity-firstboot.service.in',
+            'tegrity-firstboot.service.in.LICENSE.txt',
+        ]
+    },
     entry_points={
         'console_scripts': ['tegrity=tegrity.__main__:cli_main']
     },

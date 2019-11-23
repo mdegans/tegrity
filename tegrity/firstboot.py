@@ -30,9 +30,17 @@ import subprocess
 from typing import Iterable, Sequence
 
 __all__ = [
+    'create_service_template',
     'init_first_boot_folder',
     'install_first_boot_scripts',
+    'LOG_MODE',
     'run_scripts',
+    'SCRIPT_FOLDER_NAME',
+    'SCRIPT_MODE',
+    'SERVICE_TEMPLATE',
+    'THIS_DIR',
+    'THIS_SCRIPT',
+    'THIS_SCRIPT_ABSPATH',
 ]
 logger = logging.getLogger(__name__)
 

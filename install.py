@@ -2,7 +2,6 @@
 import os
 import logging
 import tegrity
-from tegrity.__main__ import ensure_system_requirements
 
 logger = logging.getLogger(__name__)
 
@@ -12,7 +11,7 @@ PIP3 = '/usr/bin/pip3'
 def install(prefix=None):
     """installs tegrity using pip3 to prefix"""
     logger.info(f"Installing {tegrity.__name__}")
-    ensure_system_requirements()
+    tegrity.utils.ensure_system_requirements()
     this_dir = os.path.dirname(__file__)
     command = [PIP3, 'install', '--upgrade', '--no-cache']
     if prefix:
@@ -27,6 +26,7 @@ def uninstall():
     tegrity.utils.run(
         (PIP3, 'uninstall', '--no-cache', tegrity.__name__)
     )
+    logger.info(f"To remove all logs and cache, remove ~/.tegrity as well")
 
 
 def cli_main():
@@ -41,7 +41,9 @@ def cli_main():
     ap.add_argument('-u', '--uninstall', help="uninstalls tegrity",
                     action='store_true')
     ap.add_argument('--prefix', help='override prefix (see pip manual)')
+
     args = ap.parse_args()
+
     logging.basicConfig(level=logging.DEBUG if args.verbose else logging.INFO)
 
     if args.uninstall:

@@ -21,12 +21,14 @@
 import getpass
 import logging
 import os
+import shutil
 import subprocess
 import time
 
 from typing import (
     Any,
     Callable,
+    Iterable,
     Optional,
     Sequence,
 )
@@ -35,6 +37,7 @@ import tegrity
 
 # these really live in firstboot.py because firstboot.py needs to exist on it's
 # own and uses these functions:
+# noinspection PyProtectedMember
 from tegrity.firstboot import (
     _yes_or_no as yes_or_no,
     _run_one as run,
@@ -88,8 +91,9 @@ def chooser(list_of_things: Sequence, name_of_things: str,
         # todo, add option for singular
         if name_of_things.endswith('s'):
             name_of_things = name_of_things[:-1]
-        logger.debug(f"Only one {name_of_things} found: {list_of_things[0]}")
-        return list_of_things[0]
+        thing = list_of_things[0]
+        logger.debug(f"Only one {name_of_things} found: {thing}")
+        return thing if not formatter else formatter(thing)
     choice = None
     while choice not in range(len(list_of_things)):
         print(f"Please choose from the following {name_of_things}:")
@@ -111,9 +115,9 @@ def backup(path) -> str:
 
 
 def move(source, destionation):
-    """wraps os.rename() and logs to backup"""
+    """wraps shutil.move() and logs to backup"""
     logger.debug(f"moving {source} to {destionation}")
-    os.rename(source, destionation)
+    shutil.move(source, destionation)
 
 
 rename = move
@@ -127,27 +131,6 @@ def join_and_check(path, *sub) -> str:
             f"{os.path.join(*sub)} not found in {path}. "
             f"{tegrity.err.BUNDLE_REINSTALL}")
     return path
-
-
-def ensure_sudo() -> str:
-    """ensures user is root and SUDO_USER is in os.environ,
-    :returns: the real username (see real_username())
-    """
-    # if we aren't root, or don't have access to host environment variables...
-    username = real_username()
-    uid = os.getuid()
-    if username == "root":
-        raise EnvironmentError(
-            "Could not look up SUDO_USER. Are you running using 'sudo su'? "
-            "This is currently unsupported since we need to look up your real "
-            "username in order to find your ~/nvsdk/sdkm.db file and su clears "
-            "the environment.")
-    if uid != 0:
-        raise PermissionError(
-            "You do not appear to be root (not uid 0). Please try running the "
-            "script with sudo."
-        )
-    return username
 
 
 def estimate_size(folder) -> int:
@@ -173,6 +156,81 @@ def estimate_size(folder) -> int:
     size = int(size.decode()[:-2])
 
     return size
+
+
+def mount(source, target,
+          type_: Optional[str] = None,
+          options: Optional[Iterable[str]] = None,
+          ) -> subprocess.CompletedProcess:
+    logger.info(f"Mounting {target}")
+    command = ['mount']
+    if type_:
+        command.extend(('-t', str(type_)))
+    if options:
+        command.append('-o')
+        command.append(','.join(sorted(options)))
+    command.extend((source, target))
+    return tegrity.utils.run(command)
+
+
+def umount(target) -> subprocess.CompletedProcess:
+    """
+    unmounts a target path
+    :arg target: the target to unmount
+    :return: subprocess.CompletedProcess of the unmount command
+    """
+    logger.info(f"Unmounting: {target}")
+    return tegrity.utils.run(('umount', target))
+
+
+def ensure_sudo() -> str:
+    """ensures user is root and SUDO_USER is in os.environ,
+    :returns: the real username (see real_username())
+    """
+    # if we aren't root, or don't have access to host environment variables...
+    username = real_username()
+    uid = os.getuid()
+    if username == "root":
+        raise EnvironmentError(
+            "Could not look up SUDO_USER. Are you running using 'sudo su'? "
+            "This is currently unsupported since this script needs to look up "
+            "your real username in order to find your ~/nvsdk/sdkm.db file and "
+            "su clears the environment.")
+    if uid != 0:
+        raise PermissionError("this script needs sudo")
+    return username
+
+
+def ensure_config_path(
+        path=tegrity.DEFAULT_CONFIG_PATH,
+        mode=tegrity.CONFIG_PATH_MODE,):
+    """creates a config/cache/log folder in ~ with the proper permissions."""
+    logger.info(f"Ensuring {path} exists")
+    if os.path.exists(path):
+        if os.path.isdir(path):
+            tegrity.utils.chmod(path, mode)
+        else:
+            raise FileExistsError(
+                f"{path} is supposed to be a directory, please relocate this "
+                f"file if not needed or modify {tegrity.__name__} source"
+            )
+        path_stat = os.stat(path)
+        if not path_stat.st_gid == 0 and path_stat.st_gid == 0:
+            logger.warning(
+                f"{path} does not appear to be owned by root. "
+                f"This is fine, but please be aware that sometimes sensitive "
+                f"information is dumped into log files.")
+    else:
+        tegrity.utils.mkdir(path, mode)
+
+
+def ensure_system_requirements(cross_prefix=None):
+    """ensures system requirements are installed and returns cross prefix"""
+    logger.info("Ensuring system requirements...")
+    tegrity.utils.ensure_sudo()
+    tegrity.apt.ensure_requirements()
+    ensure_config_path()
+    return tegrity.toolchain.ensure(cross_prefix)
 
 
 if __name__ == '__main__':

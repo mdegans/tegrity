@@ -36,6 +36,7 @@ from typing import (
 )
 
 import tegrity
+from tegrity.settings import LBZIP2
 
 logger = logging.getLogger(__name__)
 
@@ -88,7 +89,8 @@ def download(url: Text,
     if hasher and hexdigest:
         if hasher.hexdigest() != hexdigest:
             raise tegrity.err.InTegrityError(
-                f"Hash verification failed for {filename}."
+                f"Hash verification failed for {url}. "
+                f"expected: {hexdigest} but got {hasher.hexdigest()}"
             )
 
     return local_dest
@@ -148,5 +150,6 @@ def verify(file: Union[str, os.PathLike],
             chunk = f.read(chunk_size)
     if hasher.hexdigest() != hexdigest:
         raise tegrity.err.InTegrityError(
-            f"Hash verification failed for {file}."
+            f"Hash verification failed for {file}.  "
+            f"expected: {hexdigest} but got {hasher.hexdigest()}"
         )

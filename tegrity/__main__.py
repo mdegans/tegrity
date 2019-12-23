@@ -21,169 +21,122 @@
 import os
 import logging
 
+from typing import (
+    Iterable,
+)
+
 import tegrity
+import tegrity.settings
 
 logger = logging.getLogger(__name__)
 
-TEGRITY_CONFIG_PATH_MODE = 0o700
-# change this if it conflicts with an existing ~/.tegrity folder you want to
-# to keep
-DEFAULT_CONFIG_PATH = os.path.join(
-    os.path.expanduser("~"), f".{tegrity.__name__}")
 
+def build(l4t_path: os.PathLike,
+          cross_prefix: str = None,
+          firstboot: Iterable[os.PathLike] = None,
+          build_kernel: bool = False,
+          kernel_load_config: os.PathLike = None,
+          kernel_save_config: os.PathLike = None,
+          kernel_menuconfig: bool = None,
+          kernel_localversion: str = None,
+          public_sources: str = None,
+          public_sources_sha512: str = None,
+          rootfs_source: str = None,
+          rootfs_source_sha512: str = None,
+          out: str = None,):
 
-def ensure_config_path(path=DEFAULT_CONFIG_PATH, mode=TEGRITY_CONFIG_PATH_MODE):
-    logger.info(f"Ensuring {DEFAULT_CONFIG_PATH} exists")
-    if os.path.exists(path):
-        if os.path.isdir(path):
-            tegrity.utils.chmod(path, mode)
-        else:
-            raise FileExistsError(
-                f"{path} is supposed to be a directory, please relocate this "
-                f"file if not needed or modify {tegrity.__name__} source"
-            )
-        path_stat = os.stat(path)
-        if not path_stat.st_gid == 0 and path_stat.st_gid == 0:
-            logger.warning(
-                f"{DEFAULT_CONFIG_PATH} does not appear to be owned by root. "
-                f"This is fine, but please be aware that sometimes sensitive "
-                f"information is dumped into log files.")
+    # if not l4t_path and hwid, prompt the user to choose a bundle with that
+    # info from ~/.nvsdkm/sdkm.db
+    rootfs = tegrity.utils.join_and_check(l4t_path, 'rootfs')
 
-    else:
-        tegrity.utils.mkdir(path, mode)
-
-
-def ensure_system_requirements():
-    """ensures system requirements are installed and returns cross prefix"""
-    logger.info("Ensuring system requirements...")
-    tegrity.utils.ensure_sudo()
-    tegrity.apt.ensure_requirements()
-    return tegrity.toolchain.ensure()
-
-
-def main(
-        firstboot=None,
-        load_kconfig=None,
-        localversion=None,
-        menuconfig=None,
-        rootfs_source=None,
-        save_kconfig=None,
-):
-    cross_prefix = ensure_system_requirements()
-    ensure_config_path()
-    with tegrity.db.connect() as conn:
-        # choose bundle and set up paths
-        bundle = tegrity.utils.chooser(
-            tegrity.db.get_bundles(conn), "bundles",
-            formatter=tegrity.db.bundle_formatter)
-
-        if bundle['targetHW'] not in tegrity.db.SUPPORTED_IDS:
-            raise NotImplemented(
-                f"Model not supported (yet). Supported models: "
-                f"{tegrity.db.SUPPORTED_IDS}")
-
-        # build the kernel (see kernel.py), modules, etc...
+    # build the kernel (see kernel.py), modules, etc...
+    if build_kernel:
         tegrity.kernel.build(
-            bundle, cross_prefix,
-            menuconfig=menuconfig,
-            localversion=localversion,
-            save_kconfig=save_kconfig,
-            load_kconfig=load_kconfig,
-        )
+            l4t_path, public_sources,
+            cross_prefix=cross_prefix,
+            public_sources_sha512=public_sources_sha512,
+            menuconfig=kernel_menuconfig,
+            localversion=kernel_localversion,
+            save_kconfig=kernel_save_config,
+            load_kconfig=kernel_load_config,)
 
-        if rootfs_source:
-            if rootfs_source == 'download':
-                tegrity.rootfs.reset(bundle)
-            else:
-                tegrity.rootfs.reset(bundle, rootfs_source)
+    tegrity.rootfs.main(
+        rootfs,
+        rootfs_source,
+        rootfs_source_sha512,
+        do_apply_binaries=build_kernel or rootfs_source,
+        target_overlay=build_kernel,
+        fix_sources=rootfs_source,
+    )
 
-        # apply binaries to the rootfs (kernel modules, nvidia stuff)
-        tegrity.rootfs.apply_binaries(bundle)
+    # install any first boot scripts
+    if firstboot:
+        tegrity.firstboot.install_first_boot_scripts(
+            rootfs, firstboot, overwrite=True, interactive=True,)
 
-        if firstboot:
-            tegrity.firstboot.install_first_boot_scripts(
-                tegrity.rootfs.get_path(bundle), firstboot)
-
-        tegrity.image.make_image(bundle)
+    # assemble the final image(s)
+    return tegrity.image.make_image(l4t_path, out=out)
 
 
 def cli_main():
     import argparse
 
     ap = argparse.ArgumentParser(
-        description="Helps bake Tegra OS images",
-        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
-    )
-    # ap.add_argument(
-    #     '--kernel-source', help=f"path to a kernel tarball downloaded from "
-    #                             f"{tegrity.kernel.NANO_TX1_URL}"
-    # )
-    ap.add_argument(
-        '--localversion', default=tegrity.kernel.DEFAULT_LOCALVERSION,
-        help="override local version string (kernel name suffix).",
-    )
-    ap.add_argument('--save-kconfig', help="save kernel config to this file")
-    ap.add_argument('--load-kconfig', help="load kernel config from this file")
-    ap.add_argument(
-        '--menuconfig', help="customize kernel config interactively using a menu "
-        "(WARNING: here be dragons! While it's unlikely, you could possibly "
-        "damage your Tegra or connected devices if the kernel is "
-        "mis-configured).", action='store_true'
-    )
-    ap.add_argument(
-        '--rootfs-source', help="Location of rootfs to download/extract/copy "
-        "from. may be a url, path to a tarball, or a local directory path "
-        "specify 'download' to download a new, bundle appropriate, copy "
-        "from Nvidia. No arguments will use the existing rootfs."
-    )
-    # todo:
-    #  finish this wip in firstboot.sh
-    # ap.add_argument(
-    #     '--firstboot', help=f"Iterable of first boot scripts to install. They "
-    #     f"will be copied to rootfs/etc/{tegrity.firstboot.SCRIPT_FOLDER_NAME} "
-    #     f"and executed **in the order supplied here** on first boot."
-    # )
-    # todo: implement
-    # ap.add_argument(
-    #     '--firstboot-dpkg', help="A list of Debian packages to "
-    #     "copy to the rootfs. See manual for wildcard examples. They will be "
-    #     "installed in the order dpkg sees fit on first boot before --firstboot"
-    # )
-    # ap.add_argument(
-    #     '--firstboot-apt-install', help="a set of apt packages to install on "
-    #     "first boot. Order does not matter. This will be run after"
-    #     "--firstboot-dpkg"
-    # )
-    ap.add_argument(
-        '-l', '--log-file', help="where to store log file",
-        default=os.path.join(DEFAULT_CONFIG_PATH, "tegrity.log")
-    )
-    ap.add_argument(
-        '-v', '--verbose', help="prints DEBUG log level (DEBUG is logged anyway "
-        "in the ", action='store_true'
-    )
+        description="Helps bake Tegra OS images.",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,)
 
-    # get argparse args in dict format
-    kwargs = vars(ap.parse_args())
+    chooser_msg = "(**required to avoid interactive chooser**)"
 
-    # set up configuration path
-    ensure_config_path()
+    # l4t_path: os.PathLike = None,
+    ap.add_argument(
+        'l4t_path', help=f"path to desired Linux_for_Tegra path.")
+    # cross_prefix: str = None,
+    ap.add_argument(
+        '--cross-prefix', help="the default cross prefix",
+        default=tegrity.toolchain.get_cross_prefix())
+    # firstboot: Iterable[os.PathLike] = None,
+    ap.add_argument(
+        '--firstboot', help="list of first boot scripts to install", nargs='+',)
+    # public_sources: str = None,
+    ap.add_argument(
+        '--public-sources', help="url or local path to a public sources tarball.",
+        default=tegrity.settings.NANO_TX1_KERNEL_URL,)
+    # public_sources_sha512: str = None,
+    ap.add_argument(
+        '--public-sources-sha512', help="public sources sha512 expected",
+        default=tegrity.settings.NANO_TX1_KERNEL_SHA512,)
+    # build_kernel: bool = False,
+    ap.add_argument(
+        '--build-kernel', help="builds the kernel", action='store_true')
+    # kernel_load_config: os.PathLike = None,
+    ap.add_argument(
+        '--kernel-load-config', help="loads kernel configuration from this file")
+    # kernel_save_config: os.PathLike = None,
+    ap.add_argument(
+        '--kernel-save-config', help="save kernel configuration to this file")
+    # kernel_localversion: str = None,
+    ap.add_argument(
+        '--kernel-localversion', help="local version string for kernel",
+        default=tegrity.settings.DEFAULT_LOCALVERSION,)
+    # kernel_menuconfig: bool = None,
+    ap.add_argument(
+        '--kernel-menuconfig', help="interactively configure kernel",
+        action='store_true',)
+    # rootfs_source: str = None,
+    ap.add_argument(
+        '--rootfs-source', help='url or local path to rootfs tarball / directory, '
+        'specify "l4t" to download a new default rootfs, or "ubuntu_base" to get '
+        'an Ubuntu Base rootfs.')
+    # rootfs_sources_sha512: str = None,
+    ap.add_argument(
+        '--rootfs-source-sha512', help='sha512sum of rootfs tarball')
+    # out: str = None, ):
+    ap.add_argument(
+        '-o', '--out', help="the out path (for sd card image, etc)")
 
-    # configure logging
-    fh = logging.FileHandler(kwargs['log_file'])
-    fh.setLevel(logging.DEBUG)
-    fh.setFormatter(logging.Formatter(
-        '%(asctime)s::%(levelname)s::%(name)s::%(message)s'))
-    ch = logging.StreamHandler()
-    ch.setFormatter(logging.Formatter())
-    ch.setLevel(logging.DEBUG if kwargs['verbose'] else logging.INFO)
-    logging.basicConfig(
-        level=logging.DEBUG,
-        handlers=(fh, ch),
-    )
-    del kwargs['verbose'], kwargs['log_file']
+    kwargs = tegrity.cli.cli_common(ap)
 
-    main(**kwargs)
+    return build(**kwargs)
 
 
 if __name__ == '__main__':

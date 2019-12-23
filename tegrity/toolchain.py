@@ -18,7 +18,6 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
-import distutils.version
 import hashlib
 import logging
 import os
@@ -32,12 +31,18 @@ import tegrity
 
 from typing import (
     Optional,
-    Union,
 )
 
 logger = logging.getLogger(__name__)
 
+# toolchain minimum version needed
 MINIMUM_VERSION = "7.3.1"
+
+# used to find the toolchain binaries, no need to change this on Tegra,
+# but could be used if this script is ported to x86
+ARCH = 'aarch64'
+
+DEFAULT_TARBALL_INSTALL_PREFIX = '/usr/local'
 
 if platform.machine() == "i386":
     URL = "https://releases.linaro.org/components/toolchain/binaries/7.3-2018.05/aarch64-linux-gnu/gcc-linaro-7.3.1-2018.05-i686_aarch64-linux-gnu.tar.xz"
@@ -50,37 +55,22 @@ else:
         "Unsupported architecture. Only x86 and x86-64 currently supported.")
 
 
-def get_cross_version() -> Optional[str]:
-    """Checks the cross compiler version (technically just checks gcc version).
-    :returns: None if none found or the strict version string if found
-    >>> get_cross_version()
-    '7...'
-    """
-    logger.debug("Checking for gcc cross compiler...")
-    gcc = shutil.which("aarch64-linux-gnu-gcc")
+def get_cross_prefix() -> Optional[str]:
+    """:returns: the cross prefix for the toolchain in path"""
+    logger.debug(f"Checking for cross compiler...")
+    gcc = shutil.which(f"aarch64-linux-gnu-gcc")
     if not gcc:
         return
     logger.debug(f"Found gcc cross compiler at {gcc}")
-    cp = subprocess.run((gcc, '--version'), stdout=subprocess.PIPE)
-    version_string = cp.stdout.splitlines()[0].split()[-1].decode()
-    logger.debug(f"Version reported is {version_string}")
-    return version_string
-
-
-def has_valid_version() -> bool:
-    """:returns: True if a supported version of gcc is found, False otherwise
-    >>> has_valid_version()
-    True
-    """
-    version = get_cross_version()
-    if not version:
-        return False
-    min_version = distutils.version.StrictVersion(MINIMUM_VERSION)
-    return distutils.version.StrictVersion(version) > min_version
+    cross_prefix = os.path.join(
+        os.path.dirname(shutil.which(f"aarch64-linux-gnu-gcc")),
+        f"aarch64-linux-gnu-")
+    return cross_prefix
 
 
 # noinspection PyUnresolvedReferences
-def install_from_tarball(install_path: Union[str, os.PathLike] = None) -> str:
+def install_from_tarball(
+        install_path: os.PathLike = DEFAULT_TARBALL_INSTALL_PREFIX) -> str:
     """
     Installs the cross compiler toolchain to |install_path| (default /usr/local)
     :returns: the cross prefix
@@ -93,8 +83,6 @@ def install_from_tarball(install_path: Union[str, os.PathLike] = None) -> str:
     ...     os.path.isfile(os.path.join(bindir, 'aarch64-linux-gnu-gcc'))
     True
     """
-    if not install_path:
-        install_path = "/usr/local"
     logger.debug(f"Install path set to: {install_path}")
 
     # get the md5 to verify archive tegrity
@@ -143,23 +131,32 @@ def install_from_apt():
     return "/usr/bin/aarch64-linux-gnu-"
 
 
-def ensure():
-    """ensures toolchain is installed and returns bin directory
+def ensure(cross_prefix=None) -> str:
+    """ensures toolchain is installed interactively and returns cross prefix
+
+    :param cross_prefix: overrides auto-detection, still checks if gcc exists
 
     >>> ensure()
-    '/usr/bin/aarch64-linux-gnu-'
+    '/usr/local/bin/aarch64-linux-gnu-'
     """
-    if not tegrity.toolchain.has_valid_version():
+    # autodetect cross_prefix if not supplied
+    cross_prefix = cross_prefix if cross_prefix else get_cross_prefix()
+    # this should point to gcc:
+    gcc = f"{cross_prefix}gcc"
+    if cross_prefix and os.path.isfile(gcc):
+        return cross_prefix
+    else:
         logger.error(
-            "Valid cross compiler toolchain not found. Do you wish to install "
+            "aarch64-linux-gnu toolchain not found. Do you wish to install "
             "one, either from system apt repositories or the recommended from "
             "releases.linaro.org?"
         )
         choice = None
         while not 1 <= choice <= 2:
             try:
-                choice = int(input("Choose 1 (apt), 2 (releases.linaro.org),"
-                                   "or press ctrl+c to exit. "))
+                choice = int(input(
+                    "choose 1 (apt), 2 (releases.linaro.org), or ctrl+c to exit")
+                )
             except ValueError:
                 logger.error("invalid choice, try again")
                 pass
@@ -167,13 +164,50 @@ def ensure():
             return tegrity.toolchain.install_from_apt()
         elif choice == 2:
             return tegrity.toolchain.install_from_tarball()
-    else:
-        return os.path.join(
-            os.path.dirname(shutil.which("aarch64-linux-gnu-gcc")),
-            "aarch64-linux-gnu-"
-        )
+
+
+def main(check=None,
+         install_tarball=None,
+         prefix=None,
+         install_apt=None):
+    if not (check or install_tarball or install_apt):
+        raise ValueError("Nothing to do.")
+    cross_prefix = get_cross_prefix()
+    if check:
+        if not cross_prefix:
+            raise FileNotFoundError("Toolchain not found.")
+    if install_tarball:
+        cross_prefix = install_from_tarball(prefix)
+    if install_apt:
+        cross_prefix = install_from_apt()
+    logger.info(f"CROSS_PREFIX={cross_prefix}")
+
+
+def cli_main():
+    import argparse
+    ap = argparse.ArgumentParser(
+        description='toolchain utility',
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+    )
+
+    ap.add_argument(
+        '--check', help="checks if the toolchain meets requirements",
+        action='store_true'),
+    ap.add_argument(
+        '--install-tarball', help="downloads and installs NVIDIA recommended"
+        "linaro toolchain",
+        action='store_true'),
+    ap.add_argument(
+        '--prefix', help="install prefix for recommended linaro tarball",
+        default='/usr/local'),
+    ap.add_argument(
+        '--install-apt', help="install distro bundled toolchain (not "
+        "recommended, but it appears to work)",
+        action='store_true'),
+
+    # add --log-file and --verbose
+    main(**tegrity.cli.cli_common(ap))
 
 
 if __name__ == '__main__':
-    import doctest
-    doctest.testmod(optionflags=doctest.ELLIPSIS)
+    cli_main()

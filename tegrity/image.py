@@ -20,55 +20,88 @@
 
 import logging
 import os
-import sqlite3
 import time
 import math
 
 import tegrity
 
 NANO_SD_CARD_SCRIPT = "create-jetson-nano-sd-card-image.sh"
+JETSON_DISK_IMAGE_CREATOR = ("tools", "jetson-disk-image-creator.sh")
 
 logger = logging.getLogger(__name__)
 
 
-def make_image(bundle: sqlite3.Row,
-               image_out_path=None,):
+# todo: change this when adding Xavier support
+def make_image(l4t_path: os.PathLike,
+               out: os.PathLike = None,):
     """
     Make OS Image for Tegra.
 
-    If Xavier, it creates a flashable xavier image
     if Nano, it creates a SD card
+    Xavier support planned.
 
-    :param bundle:
-    :param image_out_path:
+    :param l4t_path: the path to a Linux_for_Tegra folder
+    :param hwid: the hardware id of the board (eg. P3448-0000)
+    :param out: the out path for the disk image
     :return:
     """
-    l4t = tegrity.db.get_l4t_path(bundle)
-    hwid = bundle['targetHW']
+    # todo: add xavier support. Thanks Nvidia!
+    # todo: refactor, this is too long and ugly
+    hwid = tegrity.db.autodetect_hwid(l4t_path)
+    if hwid == tegrity.db.NANO_DEV_ID:
+        if not out:
+            out = os.path.join(l4t_path, f"sdcard.{int(time.time())}.img")
 
-    # jetson nano development kit
-    if hwid in tegrity.db.NANO_IDS:
-        if not image_out_path:
-            image_out_path = os.path.join(l4t, f"sdcard.{int(time.time())}.img")
-
-        rootfs_size = tegrity.utils.estimate_size(os.path.join(l4t, 'rootfs'))
+        rootfs_size = tegrity.utils.estimate_size(
+            os.path.join(l4t_path, 'rootfs'))
         # add 1GB for other partitions, updates, some guaranteed free space,
         # and round up to nearest power of two sd card size:
         sd_size = 2 ** (math.ceil(math.log(rootfs_size + 1, 2)))
-        logger.info(f"a {sd_size}GB size SD card will be required.")
+        logger.info(f"a {sd_size} GB size SD card will be required.")
 
-        script = os.path.join(l4t, NANO_SD_CARD_SCRIPT)
-        arguments = (
-            '-o', image_out_path,
+        old_script = os.path.join(l4t_path, NANO_SD_CARD_SCRIPT)
+        new_script = os.path.join(l4t_path, *JETSON_DISK_IMAGE_CREATOR)
+        arguments = [
+            '-o', out,
             '-s', f"{sd_size}GB",
-            '-r', '200' if hwid == tegrity.db.NANO_DEV_ID else '300',
-        )
+            '-r', '200',
+        ]
+        if os.path.isfile(old_script):
+            script = old_script
+        elif os.path.isfile(new_script):
+            script = new_script
+            arguments.extend(('-b', 'jetson-nano',))
+        else:
+            # todo: consider including and modifying jetson-disk-image-creator
+            raise FileNotFoundError(
+                f"could not find {NANO_SD_CARD_SCRIPT}, "
+                f"or {os.path.join(*JETSON_DISK_IMAGE_CREATOR)} in "
+                f"{l4t_path}.")
     else:
-        raise NotImplemented("only Jetson Nano implemented so far")
+        raise NotImplemented(
+            "only Jetson Nano Development version implemented so far")
 
     logger.info(
         f"Creating image for {tegrity.db.MODEL_NAME_MAP[hwid]} ({hwid})")
-    tegrity.utils.run((script, *arguments), cwd=l4t).check_returncode()
-    logger.info(f"Your image for {tegrity.db.MODEL_NAME_MAP[hwid]} "
-                f"is located at: {image_out_path}")
+    tegrity.utils.run((script, *arguments)).check_returncode()
+    logger.info(
+        f"Your image for {tegrity.db.MODEL_NAME_MAP[hwid]} is located at: {out}")
 
+    return out
+
+
+def cli_main():
+    import argparse
+    ap = argparse.ArgumentParser(
+        description="Makes a Tegra disk image (currently only Nano Development)",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,)
+
+    ap.add_argument(
+        'l4t_path', help="path to Linux_for_Tegra folder to search for kernel, "
+        "rootfs, etc...",)
+
+    ap.add_argument(
+        '-o', '--out', help="out file for the image (default "
+        "sdcard.{timestamp}.img in the Linux_for_Tegra folder)")
+
+    make_image(**tegrity.cli.cli_common(ap))

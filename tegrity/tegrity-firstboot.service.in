@@ -14,7 +14,6 @@ Before={before}
 ConditionFirstBoot=yes
 ConditionPathIsReadWrite=/etc
 Conflicts=shutdown.target
-DefaultDependencies=no
 Description="Tegrity First Boot Service"
 
 [Service]

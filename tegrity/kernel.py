@@ -21,202 +21,266 @@
 import hashlib
 import logging
 import os
-import sqlite3
 import tempfile
-import time
 
 import tegrity
 
+from typing import (
+    Iterable,
+)
+
+from tegrity.settings import (
+    KERNEL_TARBALL_PATH,
+    KERNEL_PATH,
+    DEFAULT_LOCALVERSION,
+    NANO_TX1_KERNEL_URL,
+    NANO_TX1_KERNEL_SHA512,
+)
+
 logger = logging.getLogger(__name__)
 
-KERNEL_PATH = ('kernel', 'kernel-4.9')
-DEFAULT_LOCALVERSION = '-tegrity'
-
-NANO_TX1_URL = "https://developer.nvidia.com/embedded/dlc/r32-2-1_Release_v1.0/Nano-TX1/sources/public_sources.tbz2"
-NANO_TX1_SHA = "c2609cd107989a89063aa21cf6e06c75fed1c3873e5ef5840d2eb297af30e8db00d23465484bc3c8669059ce48d62dfd68ea9a3e3a9ade5d9ab917a6d533a808"
-
-XAVIER_TX2_URL = "https://developer.nvidia.com/embedded/dlc/r32-2-1_Release_v1.0/TX2-AGX/sources/public_sources.tbz2"
-XAVIER_TX2_SHA = "697e191e4c546e39cd40d142404606099c82df909e2ffb5235d3e71ad2d9f07889c38c11468e439e1900850945353ec58b67ddbff5713256f176e07d55114f10"
+# this should never need to change on Tegra, but if you want to use this code
+# elsewhere, it might be useful (tells make which architecture ot target)
+ARCH = 'arm64'
 
 
-def download_source(bundle: sqlite3.Row, source_dir):
+def _get_source(tmp, public_sources, public_sources_sha):
+    """called from main, separated for testing purposes"""
+    source_path = os.path.join(tmp, 'sources')
+    logger.debug(f"source path: {source_path}")
+    os.mkdir(source_path, mode=0o755)
+    download_source(
+        public_sources, source_path,
+        hasher=hashlib.sha512,
+        hexdigest=public_sources_sha, )
+    kernel_source_path = os.path.join(source_path, *KERNEL_PATH)
+    if not os.path.isdir(kernel_source_path):
+        raise RuntimeError("Could not find kernel source.")
+    os.chdir(kernel_source_path)
+
+
+def download_source(public_sources: str, source_dir,
+                    hasher=None,
+                    hexdigest=None):
     """
     gets kernel source
 
-    :param bundle: tag to get (use list_tags() for a list of supported tags)
+    :param public_sources: url or path to public_sources.tbz2
     :param source_dir: the directory to download sources to
-
-    :raises: subprocess.CalledProcessError on error
+    :param hasher: passed to tegrity.download.extract to verify
+    public_sources.tbz2
+    :param hexdigest: passed to tegrity.download.extract to verify
+    public_sources.tbz2
     """
-    logger.info("Obtaining kernel sources from tarball.")
-
-    # choose the appropriate source tarball
-    hwid = bundle['targetHW']
-    if hwid in tegrity.rootfs.NANO_TX1_IDS:
-        logger.debug("Selecting tarball for Nano/TX1")
-        url = NANO_TX1_URL
-        sha = NANO_TX1_SHA
-    elif hwid in tegrity.rootfs.XAVIER_TX2_IDS:
-        logger.debug("Selecting tarball for TX2/Xavier")
-        url = XAVIER_TX2_URL
-        sha = XAVIER_TX2_SHA
-    else:
-        raise ValueError(
-            f"Unrecognized Hardware ID ({hwid}). Please report this.")
-
+    logger.info(f"Obtaining kernel sources from {public_sources}.")
     with tempfile.TemporaryDirectory() as tmp:
         tegrity.download.extract(
-            url, tmp,
-            hasher=hashlib.sha512,
-            hexdigest=sha
-        )
+            public_sources, tmp, hasher=hasher, hexdigest=hexdigest)
         kernel_tarball = os.path.join(
-            tmp, 'public_sources', 'kernel_src.tbz2')
-        tegrity.download.extract(kernel_tarball, source_dir)
+            tmp, *KERNEL_TARBALL_PATH)
+        try:
+            tegrity.download.extract(kernel_tarball, source_dir)
+        except FileNotFoundError as err:
+            raise FileNotFoundError(
+                f"{err.filename} not found in tarball. Bad url?"
+            )
 
 
 # this is following the instructions from:
 # https://docs.nvidia.com/jetson/l4t/index.html#page/Tegra%2520Linux%2520Driver%2520Package%2520Development%2520Guide%2Fkernel_custom.html%23
-def build(bundle: sqlite3.Row, cross_prefix,
-          menuconfig=None,
+def build(l4t_path, public_sources,
+          # todo: xconfig=None,
+          arch=ARCH,
+          cross_prefix=tegrity.toolchain.get_cross_prefix(),
+          load_kconfig=None,
           localversion=None,
+          menuconfig=None,
+          module_archive=None,
+          public_sources_sha512=None,
           save_kconfig=None,
-          load_kconfig=None):
-    logger.info("Preparing to build kernel...")
-    arch = "arm64"
+          ):
 
-    # TODO: refactor - this function is too long and hard to test
+    logger.info("Preparing to build kernel")
+
+    # set some envs
+    os.environ['CROSS_COMPILE'] = cross_prefix
+    logger.debug(f'CROSS_COMPILE: {cross_prefix}')
+    localversion = localversion if localversion else DEFAULT_LOCALVERSION
+    os.environ['LOCALVERSION'] = localversion
+    logger.debug(f'LOCALVERSION: {localversion}')
 
     # set up some initial paths
-    l4t_path = tegrity.db.get_l4t_path(bundle)
     logger.debug(f"Linux_for_Tegra path: {l4t_path}")
     l4t_kernel_path = tegrity.utils.join_and_check(l4t_path, "kernel")
     logger.debug(f"L4T kernel path: {l4t_kernel_path}")
+
+    # create a temporary folder that self destructs at the end of the context.
     with tempfile.TemporaryDirectory() as tmp:
+
         # set up a temporary rootfs folder instead of a real one just to create
         # the kernel_supplements which will be installed by apply_binaries.sh
-        temp_rootfs = os.path.join(tmp, 'rootfs')
-        logger.debug(f"creating temporary rootfs at: {temp_rootfs}")
-        os.makedirs(temp_rootfs, 0o755)
+        rootfs = os.path.join(tmp, 'rootfs')
+        logger.debug(f"creating temporary rootfs at: {rootfs}")
+        os.makedirs(rootfs, 0o755)
 
-        ## Obtaining the Kernel Sources
+        # Obtaining the Kernel Sources
+        _get_source(tmp, public_sources, public_sources_sha512)
 
-        source_path = os.path.join(tmp, 'sources')
-        logger.debug(f"source path: {source_path}")
-        os.mkdir(source_path, mode=0o755)
-        download_source(bundle, source_path)
-        kernel_source_path = os.path.join(source_path, *KERNEL_PATH)
-        if not os.path.isdir(kernel_source_path):
-            raise RuntimeError(
-                "Could not find kernel source. "
-                "Change KERNEL_PATH to match git in kernel.py maybe?")
-        os.chdir(kernel_source_path)
-
-        ## Building the kernel
+        # Building the kernel
 
         # 1. set kernel out path
         kernel_out = os.path.join(tmp, "kernel_out")
-
-        # 2. set CROSS_COMPILE and LOCALVERSION
-        os.environ['CROSS_COMPILE'] = cross_prefix
-        logger.debug(f'CROSS_COMPILE: {cross_prefix}')
-        localversion = localversion if localversion else DEFAULT_LOCALVERSION
-        os.environ['LOCALVERSION'] = localversion
-        logger.debug(f'LOCALVERSION: {localversion}')
 
         # 2.5 set common make arguments
         make_common = [f"ARCH={arch}", f"O={kernel_out}"]
 
         # 3. Create the initial config
-        logger.info("Configuring kernel")
-        os.mkdir(kernel_out, 0o755)
-        if load_kconfig:
-            config_filename = os.path.join(kernel_source_path, '.config')
-            tegrity.utils.backup(config_filename)
-            tegrity.utils.copy(load_kconfig, config_filename)
-        else:
-            # use the default config
-            tegrity.utils.run(
-                ("make", *make_common, "tegra_defconfig"),
-            ).check_returncode()
+        config(make_common, kernel_out, load_kconfig)
         os.chdir(kernel_out)
 
         # 3.5 Customize initial configuration interactively (optional)
         if menuconfig:
-            tegrity.utils.run(
-                ("make", *make_common, "menuconfig"),
-            ).check_returncode()
+            make_menuconfig(make_common)
 
         # 4 Build the kernel and all modules
-        jobs = os.cpu_count()
-        logger.info(f"Building the kernel using all available cores ({jobs}).")
-        tegrity.utils.run(
-            ("make", *make_common, f"-j{jobs}")
-        ).check_returncode()
+        make_kernel(make_common)
 
         # 5 Backup and replace old kernel with new kernel
-        logger.info("Replacing old kernel")
-        timestamp = int(time.time())
-        new_kernel = os.path.join(
-            kernel_out, "arch", "arm64", "boot", "Image")
-        if not os.path.isfile(new_kernel):
-            errmsg = f"Can't find new kernel at {new_kernel}."
-            input(f"{errmsg} press enter to quit. debug: tmp:{tmp}")
-            raise RuntimeError(errmsg)
-        old_kernel = os.path.join(l4t_kernel_path, "Image")
-        if not os.path.isfile(old_kernel):
-            logger.warning(f"Old kernel not found at {old_kernel}")
-        else:
-            backup_image = os.path.join(
-                l4t_kernel_path, f"Image.tegrity.backup.{timestamp}")
-            os.rename(old_kernel, backup_image)
-            logger.info(f"Old kernel backed up to {backup_image}")
-        os.rename(new_kernel, old_kernel)
+        replace_kernel(kernel_out, l4t_kernel_path)
 
         # 6 Replace dtb folder with dts folder
-        logger.info("Replacing old dtb folder.")
-        new_dtb = os.path.join(
-            kernel_out, "arch", "arm64", "boot", "dts")
-        if not os.path.isdir(new_dtb):
-            raise RuntimeError("Can't find new dtb folder.")
-        old_dtb = os.path.join(l4t_kernel_path, "dtb")
-        if not os.path.isdir(old_dtb):
-            logger.warning(f"Old dtb not found at {old_dtb}")
-        else:
-            backup_dtb = os.path.join(
-                l4t_kernel_path, f"dtb.tegrity.backup.{timestamp}")
-            os.rename(old_dtb, backup_dtb)
-            logger.info(f"Old dtb folder backed up to {old_dtb}")
-        os.rename(new_dtb, old_dtb)
+        replace_dtb(kernel_out, l4t_kernel_path)
 
         # 7 Install kernel modules
-        logger.info("Installing kernel modules to temporary rootfs.")
-        tegrity.utils.run(
-            ("make", *make_common, "modules_install",
-             f"INSTALL_MOD_PATH={temp_rootfs}")
-        )
+        make_modules_install(make_common, rootfs)
 
         # 8 Archive modules
-        module_archive = os.path.join(
-            l4t_kernel_path, "kernel_supplements.tbz2")
-        if os.path.isfile(module_archive):
-            logger.info("Backing up old kernel supplements")
-            os.rename(
-                module_archive, f"{module_archive}.tegrity.backup.{timestamp}")
-        os.chdir(temp_rootfs)
-        logger.info(f"Archiving modules as {module_archive}")
-        tegrity.utils.run(
-            ("tar", "--owner", "root", "-cjf", module_archive, "lib/modules"),
-        ).check_returncode()
+        archive_modules(rootfs, module_archive, l4t_kernel_path)
 
         # 8.5 Archive config
-        if save_kconfig:
-            used_config = os.path.join(kernel_out, '.config')
-            if os.path.exists(save_kconfig):
-                tegrity.utils.backup(save_kconfig)
-            tegrity.utils.copy(used_config, save_kconfig)
+        archive_kconfig(kernel_out, save_kconfig)
 
-    # todo: backup kernel configuration
     # todo: support for external kernel modules:
 
 
+def config(make_args, kernel_out,
+           load_kconfig=None,
+           kernel_source_path=None):
+    logger.info("Configuring kernel")
+    os.mkdir(kernel_out, 0o755)
+    if load_kconfig:
+        config_filename = os.path.join(kernel_source_path, '.config')
+        tegrity.utils.copy(load_kconfig, config_filename)
+    else:
+        # use the default config
+        tegrity.utils.run(
+            ("make", *make_args, "tegra_defconfig"),
+        ).check_returncode()
+
+
+def make_menuconfig(make_args: Iterable):
+    tegrity.utils.run(
+        ("make", *make_args, "menuconfig"),
+    ).check_returncode()
+
+
+def make_kernel(make_args: Iterable):
+    jobs = os.cpu_count()
+    logger.info(f"Building the kernel using all available cores ({jobs}).")
+    tegrity.utils.run(
+        ("make", *make_args, f"-j{jobs}")
+    ).check_returncode()
+
+
+def replace_kernel(kernel_out, l4t_kernel_path):
+    logger.info("Replacing old kernel")
+    new_kernel = os.path.join(
+        kernel_out, "arch", "arm64", "boot", "Image")
+    if not os.path.isfile(new_kernel):
+        raise RuntimeError(f"Can't find new kernel at {new_kernel}.")
+    old_kernel = os.path.join(l4t_kernel_path, "Image")
+    if os.path.exists(old_kernel):
+        tegrity.utils.backup(old_kernel)
+    tegrity.utils.move(new_kernel, old_kernel)
+
+
+def replace_dtb(kernel_out, l4t_kernel_path):
+    logger.info("Replacing old dtb folder.")
+    new_dtb = os.path.join(
+        kernel_out, "arch", "arm64", "boot", "dts")
+    if not os.path.isdir(new_dtb):
+        raise RuntimeError("Can't find new dtb folder.")
+    old_dtb = os.path.join(l4t_kernel_path, "dtb")
+    if os.path.exists(old_dtb):
+        tegrity.utils.backup(old_dtb)
+    tegrity.utils.move(new_dtb, old_dtb)
+
+
+def make_modules_install(make_args: Iterable, rootfs):
+    logger.info("Installing kernel modules to temporary rootfs.")
+    tegrity.utils.run(
+        ("make", *make_args, "modules_install",
+         f"INSTALL_MOD_PATH={rootfs}")
+    )
+
+
+def archive_modules(rootfs, module_archive=None, l4t_kernel_path=None):
+    if not module_archive:
+        if l4t_kernel_path:
+            module_archive = os.path.join(
+                l4t_kernel_path, "kernel_supplements.tbz2")
+        else:
+            raise ValueError("module_archive or l4t_kernel_path required")
+    if os.path.isfile(module_archive):
+        logger.info("Backing up old kernel supplements")
+        tegrity.utils.backup(module_archive)
+    os.chdir(rootfs)
+    logger.info(f"Archiving modules as {module_archive}")
+    tegrity.utils.run(
+        ("tar", "--owner", "root", "-cjf", module_archive, "lib/modules"),
+    ).check_returncode()
+
+
+def archive_kconfig(kernel_out_folder, config_out):
+    if config_out:
+        used_config = os.path.join(kernel_out_folder, '.config')
+        if os.path.exists(config_out):
+            tegrity.utils.backup(config_out)
+        tegrity.utils.move(used_config, config_out)
+
+
+def cli_main():
+    import argparse
+
+    ap = argparse.ArgumentParser(
+        description='kernel building tool',
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+    )
+    ap.add_argument(
+        'l4t_path', help="the path to the Linux_for_Tegra folder to operate on")
+    ap.add_argument(
+        '--cross-prefix', help='sets the CROSS_PREFIX variable',
+        default=tegrity.toolchain.get_cross_prefix())
+    ap.add_argument(
+        '--public_sources', help="a local or remote path to a nvidia public_sources"
+        "tarball.", default=NANO_TX1_KERNEL_URL)
+    ap.add_argument(
+        '--public_sources_sha', help="the expected sha512 sum of the tarball",
+        default=NANO_TX1_KERNEL_SHA512)
+    ap.add_argument(
+        '--localversion', help="kernel name suffix",
+        default=DEFAULT_LOCALVERSION)
+    ap.add_argument('--save-kconfig', help="save kernel config to this file")
+    ap.add_argument('--load-kconfig', help="load kernel config from this file")
+    ap.add_argument(
+        '--menuconfig', help="customize kernel config interactively using a menu "
+        "(WARNING: here be dragons! While it's unlikely, you could possibly "
+        "damage your Tegra or connected devices if the kernel is "
+        "mis-configured).", action='store_true')
+
+    # add --log-file and --verbose
+    build(**tegrity.cli.cli_common(ap))
+
+
+if __name__ == '__main__':
+    cli_main()

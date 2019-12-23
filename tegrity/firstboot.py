@@ -26,48 +26,95 @@ import os
 import shutil
 import subprocess
 
+# import tegrity
+# this file doesn't import tegrity up here, since it must live on it's own,
 
-from typing import Iterable, Sequence
+from typing import Iterable, Sequence, Mapping
 
 __all__ = [
-    'create_service_template',
+    '_fill_template',
     'init_first_boot_folder',
     'install_first_boot_scripts',
     'LOG_MODE',
     'run_scripts',
     'SCRIPT_FOLDER_NAME',
     'SCRIPT_MODE',
-    'SERVICE_TEMPLATE',
+    'SCRIPT_NAME',
+    'SERVICE_NAME',
+    'SERVICE_TEMPLATE_FILE',
     'THIS_DIR',
-    'THIS_SCRIPT',
     'THIS_SCRIPT_ABSPATH',
 ]
-logger = logging.getLogger(__name__)
 
-THIS_SCRIPT = os.path.basename(
-    os.path.abspath(__file__))
+logger = logging.getLogger(__name__)
+_utils_logger = logging.getLogger('utils')  # fakes utils module logging,
+# otherwise they're logically in the wrong place in the log.
+
+# most of these should probably not be overriden, but you can if you have good
+# reason to.
+SCRIPT_NAME = os.path.basename(__file__)
 THIS_SCRIPT_ABSPATH = os.path.abspath(__file__)
 THIS_DIR = os.path.dirname(THIS_SCRIPT_ABSPATH)
-
-MAX_FIRST_BOOT_SCRIPTS = 999
 SCRIPT_FOLDER_NAME = 'tegrity_fb'
+SCRIPT_ABS_TARGET_PATH = os.path.join('/etc', SCRIPT_FOLDER_NAME, SCRIPT_NAME)
+SERVICE_NAME = 'tegrity-fb.service'
+SERVICE_TEMPLATE_FILE = 'tegrity-firstboot.service.in'
+SERVICE_TEMPLATE_DEFAULTS = {
+    'after': 'nvfb.service',
+    'before': 'display-manager.service',
+    'execstart': f"/usr/bin/python3 {SCRIPT_ABS_TARGET_PATH}"
+}
+
+# the permissions of the SCRIPT_FOLDER_NAME and executable contents
+# set this tp 0o700 if you want the folder and scripts to be read only to all
+# but the owner
 SCRIPT_MODE = 0o755
+# the absolute target path on the real filesystem:
 # sometimes logs leave sensitive information in full view. It's best to leave
 # this as the default just in case your first boot scripts are spitting out
 # something sensitive.
 LOG_MODE = 0o600
 
-SERVICE_TEMPLATE_FILE = os.path.join(THIS_DIR, 'tegrity-firstboot.service.in')
-with open(SERVICE_TEMPLATE_FILE) as f:
-    SERVICE_TEMPLATE = f.read()
+
+def _fill_template(
+        template: str = SERVICE_TEMPLATE_FILE,
+        parameters: Mapping[str, str] = None,) -> str:
+    """
+    :returns: a formatted first boot .service unit for systemd. Provides some
+    more friendly errors for KeyError
+    :param template: the template to fill out as string OR filename. If
+    |template| contains brackets, |template| itself is formatted. Otherwise
+    it's assumed to be a filename and an attempt is made to load and format it.
+    :param parameters: the parameters to user to .format() the template
+
+    >>> _fill_template(template='{foo}', parameters={'foo':'bar'})
+    "bar"
+    """
+    if not parameters:
+        parameters = SERVICE_TEMPLATE_DEFAULTS
+    logger.debug(f"filling out template with parameters: {parameters}")
+    if not all(c in template for c in ('{', '}')):
+        with open(os.path.join(THIS_DIR, SERVICE_TEMPLATE_FILE)) as f:
+            template = f.read()
+    try:
+        return template.format(**parameters)
+    except KeyError as err:
+        raise KeyError(
+            f"Malformed template file or parameters. "
+            f"Maybe extra or missing {{braces}}? Please see the example, ask for "
+            f"help on Nvidia's devtalk forum, or modify the "
+            f"_fill_template function in {SCRIPT_NAME} yourself."
+        ) from err
 
 
-def create_service_template(after: str, before: str, execstart: str):
-    return SERVICE_TEMPLATE.format(
-        after=after,
-        before=before,
-        execstart=execstart,
-    )
+def _install_service(rootfs, service_name=SERVICE_NAME):
+    """installs a systemd service to a rootfs"""
+    logger.debug("Installing service on rootfs.")
+    unit_file = os.path.join(rootfs, 'lib', 'systemd', 'service', service_name)
+    with open(unit_file, 'w') as f:
+        f.write(_fill_template())
+    command = ('systemctl', f'--root={rootfs}', 'enable', service_name)
+    _run_one(command).check_returncode()
 
 
 def _yes_or_no(input_text) -> bool:
@@ -80,43 +127,53 @@ def _yes_or_no(input_text) -> bool:
 
 def _chmod(path, mode):
     """wraps os.chmod() and logs to debug level"""
-    logger.debug(f"setting {path} to mode {str(oct(mode)[2:])}")
+    _utils_logger.debug(f"setting {path} to mode {str(oct(mode)[2:])}")
     return os.chmod(path, mode)
 
 
 def _mkdir(path, mode):
     """wraps os.mkdir() and logs to debug level"""
-    logger.debug(f"creating {path} with mode {str(oct(mode)[2:])}")
+    _utils_logger.debug(f"creating {path} with mode {str(oct(mode)[2:])}")
     return os.mkdir(path, mode)
 
 
 def _copy(src, dest, **kwargs):
     """wraps shutil.copy() and logs to debug level"""
-    logger.debug(f"copying {src} to {dest}")
+    _utils_logger.debug(f"copying {src} to {dest}")
     return shutil.copy(src, dest, **kwargs)
 
 
 def _remove(path):
     """wraps os.remove() (or os.rmdir) and logs to debug level
     also deletes empty directories"""
-    logger.debug(f"removing {path}")
+    _utils_logger.debug(f"removing {path}")
     try:
         os.remove(path)
     except IsADirectoryError:
         try:
             os.rmdir(path)
         except FileNotFoundError as err:
-            logger.error(f"{path} not found", err)
+            _utils_logger.error(f"{path} not found", err)
         except OSError as err:
-            logger.error(f"{path} not empty", err)
+            _utils_logger.error(f"{path} not empty", err)
 
 
-def init_first_boot_folder(rootfs, overwrite=False):
+def _run_one(*args, **kwargs) -> subprocess.CompletedProcess:
+    """wraps subprocess.run but also logs the command"""
+    if not args or not issubclass(type(args[0]), Sequence):
+        raise ValueError(
+            "Arguments must not be empty and first element must be a Sequence")
+    _utils_logger.debug(f"running: {' '.join(args[0])}")
+    return subprocess.run(*args, **kwargs)
+
+
+def init_first_boot_folder(rootfs, overwrite=False, interactive=False):
     """
     initialises files and folders required by the script
 
     :param rootfs: the rootfs path
     :param overwrite: whether to clear out the target paths without asking
+    :param interactive: if overwrite, prompt first
     :returns: a path to the script folder
     """
     tegrity_fb = os.path.join(rootfs, 'etc', SCRIPT_FOLDER_NAME)
@@ -135,7 +192,9 @@ def init_first_boot_folder(rootfs, overwrite=False):
         if len(os.listdir(tegrity_fb)) and \
                 (overwrite or _yes_or_no("First boot scripts exist. Erase? ")):
             logger.debug(f"deleting {tegrity_fb}")
-            shutil.rmtree(tegrity_fb)
+            if interactive and _yes_or_no(
+                    f"are you sure you want to rm -rf {tegrity_fb}?"):
+                shutil.rmtree(tegrity_fb)
             return init_first_boot_folder(rootfs)
     _chmod(tegrity_fb, SCRIPT_MODE)
     dest = os.path.join(tegrity_fb, os.path.basename(__file__))
@@ -144,7 +203,9 @@ def init_first_boot_folder(rootfs, overwrite=False):
     return tegrity_fb
 
 
-def install_first_boot_scripts(rootfs, scripts: Iterable[str], overwrite=False):
+def install_first_boot_scripts(rootfs, scripts: Iterable[os.PathLike],
+                               overwrite=False,
+                               interactive=False):
     """
     Installs first boot scripts to the rootfs (to be run once and then self
     destruct)
@@ -153,8 +214,9 @@ def install_first_boot_scripts(rootfs, scripts: Iterable[str], overwrite=False):
     :arg scripts: an iterable (eg, tuple, list, generator) of scripts to be
     installed. They will be run in the order inserted into this function.
     :param overwrite: passed to init_first_boot_folder
+    :param interactive: prompt before deleting on init_first_boot_folder
     """
-    tegrity_fb = init_first_boot_folder(rootfs, overwrite)
+    tegrity_fb = init_first_boot_folder(rootfs, overwrite, interactive=interactive)
     logger.info(f"Installing first boot scripts to {tegrity_fb}")
     for index, filename in enumerate(scripts):
         if index == 100:
@@ -169,16 +231,6 @@ def install_first_boot_scripts(rootfs, scripts: Iterable[str], overwrite=False):
         )
         _copy(filename, dest)
         _chmod(dest, SCRIPT_MODE)
-    pass
-
-
-def _run_one(*args, **kwargs) -> subprocess.CompletedProcess:
-    """wraps subprocess.run but also logs the command"""
-    if not args or not issubclass(type(args[0]), Sequence):
-        raise ValueError(
-            "Arguments must not be empty and first element must be a Sequence")
-    logger.debug(f"running: {' '.join(args[0])}")
-    return subprocess.run(*args, **kwargs)
 
 
 def run_scripts(folder=None, cleanup=False):
@@ -187,7 +239,7 @@ def run_scripts(folder=None, cleanup=False):
         folder = THIS_DIR
     for root, dirs, scripts in os.walk(folder):
         for script in sorted(scripts):
-            if script == THIS_SCRIPT:
+            if script == SCRIPT_NAME:
                 # if the script is this file, ignore it, otherwise this script
                 # will execute itself recursively forever
                 continue
@@ -242,56 +294,62 @@ def run_scripts(folder=None, cleanup=False):
         _remove(folder)
 
 
+def main(rootfs: str = None,
+         scripts: Iterable = None,
+         overwrite: bool = False,
+         run: str = None,
+         cleanup: bool = False,
+         interactive: bool = False) -> None:
+    """
+    if |rootfs| and |scripts|, installs the |scripts|, elif run whatever |run|
+    points to and deletes the scripts that execute successfully with |cleanup|
+
+    :param rootfs: the rootfs location
+    :param scripts: the scripts
+    :param overwrite: whether to overwrite existing scripts
+    :param run: str of folder to run scripts in **if not rootfs and scripts**
+    :param cleanup: deletes scripts that execute successfully.
+    :param interactive: if |interactive| ask for confirmation before |cleanup|
+    """
+    if rootfs and scripts:
+        install_first_boot_scripts(rootfs, scripts,
+                                   overwrite=overwrite,
+                                   interactive=interactive,)
+    elif run:
+        run_scripts(run, cleanup)
+
+
 def cli_main():
     import argparse
 
     ap = argparse.ArgumentParser(
-        description="First boot script helper script with no arguments will run"
-                    "all executable scripts in the running folder *recursively*"
-                    "and in alphanumeric order",
-        formatter_class=argparse.ArgumentDefaultsHelpFormatter
-    )
+        description="to install and run first boot scripts on a rootfs",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,)
+
     ap.add_argument(
-        '--rootfs', help=f"location of rootfs. with no other arguments, "
-        f"initializes rootfs/etc/{SCRIPT_FOLDER_NAME} and systemd first boot"
-        f"service file.")
+        'rootfs', help=f"location of rootfs")
     ap.add_argument(
-        '--overwrite', help=f"*recursively* deletes "
-        f"rootfs/etc/{SCRIPT_FOLDER_NAME} without asking for confirmation. "
-        f"(requires --rootfs or --install)",
-        action='store_true')
-    ap.add_argument(
-        '--install', help="list of scripts to install to rootfs (requires "
-        "--rootfs). **will execute in the order supplied, including duplicates**",
+        'scripts', help="list of scripts to install to rootfs to execute in the "
+        "order supplied here on first boot, **including duplicates**",
         nargs='+')
     ap.add_argument(
-        '--run', help="run scripts in the script's containing folder "
-        "(this is the default behavior if no other arguments supplied)",
-        default=THIS_DIR)
-    ap.add_argument(
-        '--cleanup', help="delete scripts and associated files after "
-        "*successful* execution", action='store_true'
+
     )
-    ap.add_argument(
-        '-v', '--verbose', help="prints DEBUG log level to stdout",
-        action="store_true")
 
-    args = ap.parse_args()
-
-    logging.basicConfig(level=logging.DEBUG if args.verbose else logging.INFO)
-
-    if args.overwrite:
-        if not args.rootfs and not args.install:
-            raise RuntimeError("--overwrite requires --rootfs or --install")
-    if args.install:
-        if not args.rootfs:
-            raise RuntimeError("--rootfs is required when using --install")
-        install_first_boot_scripts(
-            args.rootfs, args.install, args.overwrite)
-    elif args.rootfs:
-        init_first_boot_folder(args.rootfs, args.overwrite)
-    elif args.run:
-        run_scripts(args.run, args.cleanup)
+    try:
+        import tegrity
+        # add --log-file and --verbose, specify that we're running interactively
+        main(**tegrity.cli.cli_common(ap))
+    except ImportError:
+        # we're running standalone, just to run the scripts:
+        tegrity = None
+        ap = argparse.ArgumentParser("firstboot.py standalone mode")
+        ap.add_argument(
+            '--run', help="run scripts in this folder", default=THIS_DIR)
+        ap.add_argument(
+            '--cleanup', help="delete scripts after *successful* execution",
+            action='store_true')
+        main(**vars(ap.parse_args()))
 
 
 if __name__ == '__main__':

@@ -18,15 +18,38 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
-__version__ = '0.0.2'
+__version__ = '0.0.3'
 
-import tegrity.apt
+import logging
+
 import tegrity.db
+from tegrity.settings import (
+    CONFIG_PATH_MODE,
+    DEFAULT_CONFIG_PATH,
+)
+import tegrity.cli
 import tegrity.download
 import tegrity.err
 import tegrity.firstboot
 import tegrity.image
-import tegrity.kernel
-import tegrity.rootfs
 import tegrity.toolchain
+import tegrity.kernel
+import tegrity.qemu
+import tegrity.apt
+import tegrity.rootfs
+import tegrity.service
 import tegrity.utils
+
+logger = logging.getLogger(__name__)
+
+try:
+    # noinspection PyUnresolvedReferences
+    import tegrity.gui
+except ImportError as err:
+    tegrity.gui = None
+    if err.name == 'gi':
+        logger.debug(
+            "gi not available, so tegrity.gui = None and --gui cannot be used."
+            "try: sudo apt install python3-gi")
+    else:
+        raise

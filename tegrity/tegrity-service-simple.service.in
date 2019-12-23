@@ -1,0 +1,8 @@
+[Unit]
+After={after}
+Before={before}
+Description="simple service for running {exec_name}"
+[Service]
+ExecStart={execstart}
+[Install]
+WantedBy={wanted_by}

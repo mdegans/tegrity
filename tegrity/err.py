@@ -20,6 +20,10 @@
 
 # todo: add more errors from random files to here, combine similar ones
 
+# change this is you fork the project:
+README = "https://github.com/mdegans/tegrity/blob/master/README.md"
+ISSUE_URL = "https://github.com/mdegans/tegrity/issues"
+
 __all__ = [
     'BUNDLE_REINSTALL',
     'InSanityError',

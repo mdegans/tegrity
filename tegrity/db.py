@@ -31,7 +31,6 @@ import tegrity
 
 # todo: sanity checking from database input, try to break the system using
 #  a bad sdkm.db file
-
 logger = logging.getLogger(__name__)
 
 __all__ = [
@@ -67,7 +66,7 @@ MODEL_NAME_MAP = {
     NANO_DEV_ID: "Jetson Nano Development Module",
     NANO_PROD_ID: "Jetson Nano Production Module",
     TX1_ID: "Jetson TX-1",
-    TX2_ID: "Jetson TX-2"
+    TX2_ID: "Jetson TX-2",
 }
 
 
@@ -144,8 +143,27 @@ def bundle_formatter(bundle: sqlite3.Row) -> str:
     )
 
 
+def autodetect_hwid(l4t, conn: sqlite3.Connection = None):
+    """autodetects a hardward id (TargetHW) from Linux_for_Tegra path"""
+    l4t = os.path.abspath(l4t)
+    if not os.path.isdir(l4t) or os.path.basename(l4t) != "Linux_for_Tegra":
+        raise FileNotFoundError(
+            f"{l4t} does not appear to be a Linux_for_Tegra folder")
+    if not conn:
+        with tegrity.db.connect() as conn:
+            bundles = tegrity.db.get_bundles(conn)
+    else:
+        bundles = tegrity.db.get_bundles(conn)
+    for bundle in bundles:
+        if l4t == tegrity.db.get_l4t_path(bundle):
+            hwid = bundle['targetHW']
+            if hwid not in tegrity.db.MODEL_NAME_MAP:
+                raise NotImplemented(f"{hwid} currently unsupported")
+            logger.debug(
+                f"detected {tegrity.db.MODEL_NAME_MAP[hwid]} for {l4t}")
+            return hwid
+
+
 if __name__ == '__main__':
     import doctest
     doctest.testmod(optionflags=doctest.ELLIPSIS)
-
-

@@ -67,6 +67,17 @@ def default_mount_kwargs(rootfs: str) -> List[Dict[str, Union[List[str], str]]]:
 
     :param rootfs: path to the rootfs
     """
+    run_resolv = os.path.join(rootfs, 'run', 'resolvconf', 'resolv.conf')
+    etc_resolv = os.path.join(rootfs, 'etc', 'resolv.conf')
+    if os.path.exists(run_resolv) and os.path.islink(etc_resolv):
+        resolv_target = run_resolv
+    elif os.path.exists(etc_resolv) and not os.path.islink(etc_resolv):
+        resolv_target = etc_resolv
+    else:
+        resolv_target = None
+        logger.warning(
+            f"{run_resolv} or {etc_resolv} not found. "
+            f"network may not be reachable")
     list_of_kwargs = [
         # /sys
         {
@@ -103,12 +114,6 @@ def default_mount_kwargs(rootfs: str) -> List[Dict[str, Union[List[str], str]]]:
                 "ptmxmode=000",
             ]
         },
-        # resolv.conf
-        {
-            'source': '/etc/resolv.conf',
-            'target': os.path.join(rootfs, 'run', 'resolvconf', 'resolv.conf'),
-            'options': ['bind', 'ro']
-        },
         # /tmp
         {
             'source': 'tmpfs',
@@ -118,6 +123,13 @@ def default_mount_kwargs(rootfs: str) -> List[Dict[str, Union[List[str], str]]]:
             # /tmp inside the rootfs for scripts, so we need to execute from it
         },
     ]
+    if resolv_target:
+        # resolv.conf
+        list_of_kwargs.append({
+            'source': '/etc/resolv.conf',
+            'target': resolv_target,
+            'options': ['bind', 'ro']
+        })
     return list_of_kwargs
 
 

@@ -29,7 +29,7 @@ KERNEL_PATH = ('kernel', 'kernel-4.9')
 # urls, shas, and supported model numbers for their rootfs
 L4T_ROOTFS_URL = "https://developer.nvidia.com/embedded/r32-2-3_Release_v1.0/t210ref_release_aarch64/Tegra_Linux_Sample-Root-Filesystem_R32.2.3_aarch64.tbz2"
 L4T_ROOTFS_SHA512 = "15075b90d2e6f981e40e7fdd5b02fc1e3bbf89876a6604e61b77771519bf3970308ee921bb39957158153ba8597a31b504f5d77c205c0a0c2d3b483aee9f0d4f"
-UBUNTU_BASE_URL = "http://cdimage.ubuntu.com/ubuntu-base/releases/18.04.3/release/ubuntu-base-18.04-base-arm64.tar.gz"
+UBUNTU_BASE_URL = "http://cdimage.ubuntu.com/ubuntu-base/releases/18.04.3/release/ubuntu-base-18.04.3-base-arm64.tar.gz"
 UBUNTU_BASE_SHA_256 = "9193fd5f648e12c2102326ee6fdc69ac59c490fac3eb050758cee01927612021"
 NV_SOURCES_LIST = ('etc', 'apt', 'sources.list.d', "nvidia-l4t-apt-source.list")
 NV_SOURCES_LIST_TEMPLATE = """deb https://repo.download.nvidia.com/jetson/common r32 main

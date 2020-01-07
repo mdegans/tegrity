@@ -110,19 +110,17 @@ def reset(rootfs: str,
     logger.info(f"resetting rootfs{' from ' + source if source else ''}")
 
     if source:
-        # download, extract, or copy it
-        # todo: refactor this:
+        if os.path.exists(rootfs):
+            tegrity.utils.backup(rootfs)
         if source.startswith("http"):
             if not source.startswith("https"):
                 logger.warning(f"{source} is a http url. changing to https")
                 source = f"https{source[4:]}"
-            tegrity.utils.backup(rootfs)
             tegrity.download.extract(
                 source, rootfs,
                 hasher=source_hasher,
                 hexdigest=source_hexdigest,)
         elif os.path.isfile(source):
-            tegrity.utils.backup(rootfs)
             tegrity.download.extract(
                 source, rootfs,
                 hasher=source_hasher,
@@ -132,11 +130,11 @@ def reset(rootfs: str,
                     os.path.exists(os.path.join(source, 'bin')):
                 raise tegrity.err.InSanityError(
                     "/etc/ or /bin/ not found. This doesn't look like a rootfs")
-            tegrity.utils.backup(rootfs)
             tegrity.utils.copy(source, rootfs)
         return
 
-    tegrity.utils.backup(rootfs)
+    if os.path.exists(rootfs):
+        tegrity.utils.backup(rootfs)
     tegrity.download.extract(
         L4T_ROOTFS_URL, rootfs,
         hasher=hashlib.sha512,

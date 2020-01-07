@@ -153,24 +153,9 @@ def cli_main():
         '--wanted-by', help="see systemd documentation",
         default=DEFAULT_WANTED_BY
     )
-    # todo: implement (will require a bunch of qemu code)
-    # ap.add_argument(
-    #     '--user', help="run the script as a specific user on the rootfs, "
-    #                    "adding the user if necessary (default is root)"
-    # )
-    ap.add_argument(
-        '--verbose', help="print the DEBUG log level", action='store_true'
-    )
 
-    kwargs = vars(ap.parse_args())
-
-    # configure logging
-    logging.basicConfig(
-        level=logging.DEBUG if kwargs['verbose'] else logging.INFO
-    )
-    del kwargs['verbose']
     try:
-        install(**kwargs)
+        install(**tegrity.cli.cli_common(ap))
     except PermissionError as err:
         raise PermissionError(
             "depending on your rootfs permissions, you may need to run this "

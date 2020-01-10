@@ -95,6 +95,7 @@ def build(l4t_path, public_sources,
           load_kconfig=None,
           localversion=None,
           menuconfig=None,
+          gconfig=None,
           module_archive=None,
           public_sources_sha512=None,
           save_kconfig=None,
@@ -134,13 +135,9 @@ def build(l4t_path, public_sources,
         # 2.5 set common make arguments
         make_common = [f"ARCH={arch}", f"O={kernel_out}"]
 
-        # 3. Create the initial config
-        config(make_common, kernel_out, load_kconfig)
+        # 3. config
+        config(make_common, kernel_out, load_kconfig, menuconfig, gconfig)
         os.chdir(kernel_out)
-
-        # 3.5 Customize initial configuration interactively (optional)
-        if menuconfig:
-            make_menuconfig(make_common)
 
         # 4 Build the kernel and all modules
         make_kernel(make_common)
@@ -165,7 +162,9 @@ def build(l4t_path, public_sources,
 
 def config(make_args, kernel_out,
            load_kconfig=None,
-           kernel_source_path=None):
+           kernel_source_path=None,
+           menuconfig=False,
+           gconfig=False):
     logger.info("Configuring kernel")
     os.mkdir(kernel_out, 0o755)
     if load_kconfig:
@@ -176,12 +175,22 @@ def config(make_args, kernel_out,
         tegrity.utils.run(
             ("make", *make_args, "tegra_defconfig"),
         ).check_returncode()
+    if menuconfig:
+        make_menuconfig(make_args)
+    if gconfig:
+        make_gconfig(make_args)
 
 
 def make_menuconfig(make_args: Iterable):
     tegrity.utils.run(
         ("make", *make_args, "menuconfig"),
     ).check_returncode()
+
+
+def make_gconfig(make_args: Iterable):
+    tegrity.utils.run(
+        ("make", *make_args, "gconfig")
+    )
 
 
 def make_kernel(make_args: Iterable):

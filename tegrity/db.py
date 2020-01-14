@@ -96,12 +96,19 @@ def connect() -> sqlite3.Connection:
     :returns: sqlite3.Connection object to SDKM database with sqlite3.Row as the
     connection.row_factory
 
+    :raises: FileNotFoundError if sdkm.db not found (SDK Manager not installed)
+
     >>> connect()
     <sqlite3.Connection object at ...>
     """
     db_file = filename()
     logger.debug(f"Connecting to {db_file}")
-    conn = sqlite3.connect(db_file)
+    try:
+        conn = sqlite3.connect(db_file)
+    except FileNotFoundError as err:
+        raise FileNotFoundError(
+            f"sdkm.db not found. {tegrity.err.BUNDLE_REINSTALL}"
+        ) from err
     conn.row_factory = sqlite3.Row
     return conn
 

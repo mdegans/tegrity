@@ -35,6 +35,7 @@ setuptools.setup(
             'tegrity-firstboot.service.in',
             'tegrity-firstboot.service.in.LICENSE.txt',
             'tegrity-service-simple.service.in',
+            'wizard.glade',
         ]
     },
     entry_points={

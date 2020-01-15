@@ -46,3 +46,7 @@ class InTegrityError(RuntimeError):
 
 class InSanityError(RuntimeError):
     """raised when something might harm the host system or Tegra"""
+
+
+class ValidationError(ValueError):
+    """raised when a value supplied fails validation"""

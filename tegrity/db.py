@@ -150,8 +150,23 @@ def bundle_formatter(bundle: sqlite3.Row) -> str:
     )
 
 
+def _docker_autodetect_hwid(board_file):
+    logger.debug("Detecting board id from .board file.")
+    with open(board_file) as f:
+        board = f.read().strip()
+        # todo: do something fancier
+        if "nano" in board:
+            hwid = tegrity.db.NANO_DEV_ID
+    logger.debug(
+        f"detected {tegrity.db.MODEL_NAME_MAP[hwid]} for {board_file}")
+    return hwid
+
+
 def autodetect_hwid(l4t, conn: sqlite3.Connection = None):
     """autodetects a hardward id (TargetHW) from Linux_for_Tegra path"""
+    board_file = os.path.join(l4t, '.board')
+    if os.path.isfile(board_file):
+        return _docker_autodetect_hwid(board_file)
     l4t = os.path.abspath(l4t)
     if not os.path.isdir(l4t) or os.path.basename(l4t) != "Linux_for_Tegra":
         raise FileNotFoundError(

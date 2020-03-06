@@ -23,13 +23,22 @@
 import itertools
 import logging
 import os
+import pwd
 import shutil
 import subprocess
+import tempfile
 
 # import tegrity
 # this file doesn't import tegrity up here, since it must live on it's own,
 
-from typing import Iterable, Sequence, Mapping
+from typing import (
+    List,
+    Dict,
+    Iterable,
+    Mapping,
+    Sequence,
+    Union,
+)
 
 __all__ = [
     '_fill_template',
@@ -88,7 +97,7 @@ def _fill_template(
     :param parameters: the parameters to user to .format() the template
 
     >>> _fill_template(template='{foo}', parameters={'foo':'bar'})
-    "bar"
+    'bar'
     """
     if not parameters:
         parameters = SERVICE_TEMPLATE_DEFAULTS
@@ -107,6 +116,111 @@ def _fill_template(
         ) from err
 
 
+def _validate_authorized_keys(authorized_keys: Iterable[str]) -> List[str]:
+    """validates an authorized keys file using ssh-keygen
+
+    >>> keys = ['ssh-rsa AAAAB3NzaC1yc2EAAAABJQAAAQEAm3d8E7CBQdQl0Kih9zoaDBctILwSttl2tCI+rpvORup5s+KwD1+Duxj+KsMxk9Px2YwQYZunzdwpEqWI68HC54QjqXdjOUT5gRCymVi2zkylR1PBydFcfS3Mm85m3fHHdZi7AR9rwh2tqCMfDk1oQXYk1SBbJxrSnQvDxe+CeKB/Gn2AwddeVdA3UAYg4yylXcqbktJjWjK/weIKLQdt+ZNuevo13WQWIuZQBayNe4p45DuL+9wx/zul5F+Amhj0I4O6N+s0couvrvHx9gtzLLqPnvlcYcHg40xG03NlDcMxSP1nsuDtJ7Sb8Pv+eYdpIe9v2qWSUEdwgidVVnqsgQ== rsa-key-20190726', 'ssh-rsa AAAAB3NzaC1yc2EAAAABJQAAAQEAm3d8E7CBQdQl0Kih9zoaDBctILwSttl2tCI+rpvORup5s+KwD1+Duxj+KsMxk9Px2YwQYZunzdwpEqWI68HC54QjqXdjOUT5gRCymVi2zkylR1PBydFcfS3Mm85m3fHHdZi7AR9rwh2tqCMfDk1oQXYk1SBbJxrSnQvDxe+CeKB/Gn2AwddeVdA3UAYg4yylXcqbktJjWjK/weIKLQdt+ZNuevo13WQWIuZQBayNe4p45DuL+9wx/zul5F+Amhj0I4O6N+s0couvrvHx9gtzLLqPnvlcYcHg40xG03NlDcMxSP1nsuDtJ7Sb8Pv+eYdpIe9v2qWSUEdwgidVVnqsgQ== rsa-key-20190726']
+    >>> keys = _validate_authorized_keys(keys)
+    >>> type(keys)
+    <class 'list'>
+    >>> len(keys)
+    2
+    """
+    authorized_keys = list(authorized_keys)
+    logger.debug(f"validating {len(authorized_keys)} keys")
+    with tempfile.TemporaryDirectory() as tmp:
+        keyfile = os.path.join(tmp, 'authkeys')
+        _write_stripped(authorized_keys, keyfile)
+        _run(('ssh-keygen', '-l', '-f', keyfile),
+             stdout=subprocess.DEVNULL).check_returncode()
+    return authorized_keys
+
+
+def _write_stripped(authorized_keys: Iterable[str], file):
+    with open(file, 'w') as f:
+        stripped = (line.strip() for line in authorized_keys)
+        whitespaced = (f"{line}{os.linesep}" for line in stripped)
+        f.writelines(whitespaced)
+
+
+def _install_authorized_keys(username, authorized_keys):
+    _validate_authorized_keys(authorized_keys)
+    pwd_entry = pwd.getpwnam(username)
+    homedir = pwd_entry[5]
+    uid = pwd_entry[2]
+    gid = pwd_entry[3]
+    ssh_dir = os.path.join(homedir, '.ssh')
+    if not os.path.isdir(ssh_dir):
+        _mkdir(ssh_dir, 0o700)
+    _chown(ssh_dir, uid, gid)
+    authkeys_file = os.path.join(ssh_dir, 'authorized_keys')
+    _write_stripped(authorized_keys, authkeys_file)
+    _chmod(authkeys_file, 0o600)
+    _chown(authkeys_file, uid, gid)
+
+
+def _adduser(name: str, authorized_keys: Iterable[str],
+             gecos: str = None,
+             gid: int = None,
+             group: bool = False,
+             home: str = None,
+             shell: str = None,
+             ingroup: str = None,
+             no_create_home: bool = False,
+             system: bool = False,
+             uid: int = None,
+             firstuid: int = None,
+             lastuid: int = None,
+             add_extra_groups: Iterable[str] = None,):
+    """adds a user to the system with adduser and installs ssh keys for that user
+
+       :arg name: the username
+       :arg authorized_keys: authorized_keys
+       :param gecos: gecos field (see adduser manpage)
+       :param gid: group id (see adduser manual)
+       :param group: group (see adduser manual)
+       :param home: home dir for user
+       :param shell: shell for user (see adduser manual)
+       :param ingroup: (see adduser manual)
+       :param no_create_home: do not create home (see adduser manual)
+       :param system: adds a system user (gid < 1000) (see adduser manual)
+       :param uid: uid of user (see adduser manual)
+       :param firstuid: (see adduser manual)
+       :param lastuid: (see adduser manual)
+       :param add_extra_groups: (see adduser manual)
+    """
+    _utils_logger.info(f"adding user: {name}")
+    _validate_authorized_keys(authorized_keys)
+    command = ['adduser', '--disabled-password']
+    if gecos:
+        command.extend(('--gecos', gecos))
+    if gid:
+        command.extend(('--gid', gid))
+    if group:
+        command.append('--group')
+    if home:
+        command.extend(('--home', home))
+    if shell:
+        command.extend(('--shell', shell))
+    if ingroup:
+        command.extend(('--ingroup', ingroup))
+    if no_create_home:
+        command.append('--no-create-home')
+    if system:
+        command.append('--system')
+    if uid:
+        command.extend(('--uid', uid))
+    if firstuid:
+        command.extend(('--firstuid', firstuid))
+    if lastuid:
+        command.extend(('--lastuid', lastuid))
+    if add_extra_groups:
+        command.extend(('--add-extra-groups', *add_extra_groups))
+    command.append(name)
+    _run(command).check_returncode()
+    _install_authorized_keys(name, authorized_keys)
+
+
 def _install_service(rootfs, service_name=SERVICE_NAME):
     """installs a systemd service to a rootfs"""
     logger.debug("Installing service on rootfs.")
@@ -114,7 +228,7 @@ def _install_service(rootfs, service_name=SERVICE_NAME):
     with open(unit_file, 'w') as f:
         f.write(_fill_template())
     command = ('systemctl', f'--root={rootfs}', 'enable', service_name)
-    _run_one(command).check_returncode()
+    _run(command).check_returncode()
 
 
 def _yes_or_no(input_text) -> bool:
@@ -129,6 +243,11 @@ def _chmod(path, mode):
     """wraps os.chmod() and logs to debug level"""
     _utils_logger.debug(f"setting {path} to mode {str(oct(mode)[2:])}")
     return os.chmod(path, mode)
+
+
+def _chown(path, uid, gid):
+    _utils_logger.debug(f"changing {path} to UID:GID {uid}:{gid}")
+    os.chown(path, uid, gid)
 
 
 def _mkdir(path, mode):
@@ -158,13 +277,19 @@ def _remove(path):
             _utils_logger.error(f"{path} not empty", err)
 
 
-def _run_one(*args, **kwargs) -> subprocess.CompletedProcess:
-    """wraps subprocess.run but also logs the command"""
-    if not args or not issubclass(type(args[0]), Sequence):
-        raise ValueError(
-            "Arguments must not be empty and first element must be a Sequence")
-    _utils_logger.debug(f"running: {' '.join(args[0])}")
-    return subprocess.run(*args, **kwargs)
+def _run(command: Sequence, *args, sudo=False, **kwargs) -> subprocess.CompletedProcess:
+    """wraps subprocess.run but also logs the command to the debug log level
+    >>> tegrity.utils.run(('true',)).check_returncode()
+    >>> tegrity.utils.run(('false',)).check_returncode()
+    Traceback (most recent call last):
+    ...
+    subprocess.CalledProcessError: Command '('false',)' returned non-zero exit status 1.
+    """
+    command = tuple(command)
+    if sudo:
+        command = ('pkexec', *command)
+    _utils_logger.debug(f"running: {' '.join(command)}")
+    return subprocess.run(command, *args, **kwargs)
 
 
 def init_first_boot_folder(rootfs, overwrite=False, interactive=False):
@@ -294,27 +419,32 @@ def run_scripts(folder=None, cleanup=False):
         _remove(folder)
 
 
+def validate_config(config) -> Dict:
+    import json
+    with open(config) as f:
+        config = json.load(config)
+    return config
+
+
+def apply_config(rootfs: str, config:str):
+    config = validate_config(config)
+
+
 def main(rootfs: str = None,
-         scripts: Iterable = None,
-         overwrite: bool = False,
+         config: str = None,
          run: str = None,
-         cleanup: bool = False,
-         interactive: bool = False) -> None:
+         cleanup: bool = False,) -> None:
     """
     if |rootfs| and |scripts|, installs the |scripts|, elif run whatever |run|
     points to and deletes the scripts that execute successfully with |cleanup|
 
     :param rootfs: the rootfs location
-    :param scripts: the scripts
-    :param overwrite: whether to overwrite existing scripts
+    :param config: the config file
     :param run: str of folder to run scripts in **if not rootfs and scripts**
     :param cleanup: deletes scripts that execute successfully.
-    :param interactive: if |interactive| ask for confirmation before |cleanup|
     """
-    if rootfs and scripts:
-        install_first_boot_scripts(rootfs, scripts,
-                                   overwrite=overwrite,
-                                   interactive=interactive,)
+    if rootfs and config:
+        apply_config(rootfs, config)
     elif run:
         run_scripts(run, cleanup)
 
@@ -329,12 +459,7 @@ def cli_main():
     ap.add_argument(
         'rootfs', help=f"location of rootfs")
     ap.add_argument(
-        'scripts', help="list of scripts to install to rootfs to execute in the "
-        "order supplied here on first boot, **including duplicates**",
-        nargs='+')
-    ap.add_argument(
-
-    )
+        'config', help=f"config file for first boot")
 
     try:
         import tegrity
@@ -353,4 +478,10 @@ def cli_main():
 
 
 if __name__ == '__main__':
+    try:
+        import tegrity
+        import doctest
+        doctest.testmod(optionflags=doctest.ELLIPSIS)
+    except ImportError:
+        pass
     cli_main()

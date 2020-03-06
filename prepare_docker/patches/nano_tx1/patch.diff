@@ -1,0 +1,545 @@
+diff -rub ./originals/apply_binaries.sh ./modified/apply_binaries.sh
+--- ./originals/apply_binaries.sh	2019-12-09 22:58:19.000000000 -0800
++++ ./modified/apply_binaries.sh	2020-01-29 19:41:15.560329915 -0800
+@@ -34,10 +34,48 @@
+ 
+ set -e
+ 
+-# show the usages text
+-function ShowUsage {
+-    local ScriptName=$1
++readonly SCRIPT_NAME="$(basename $0)"
++readonly THIS_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" >/dev/null 2>&1 && pwd )"
++readonly THIS_USER="$(whoami)"
++# apply .deb script name (in ./nv_tegra/
++readonly DEB_SCRIPT_NAME="nv-apply-debs.sh"
++# tarballs to extract to the rootfs (path relative to BSP_DIR) if TARGET_OVERLAY
++# (otherwise apt is used)
++readonly TARBALLS=(
++	"config.tbz2"
++	"graphics_demos.tbz2"
++	# todo: if kernel_supplements is user generated, it should be installed and
++	#  the apt package for the kernel and friends not installed. a warning
++	#  should be printed that ota updates will not update the kernel.
++	"kernel_supplements.tbz2"
++	"nv_sample_apps/nvgstapps.tbz2"
++	"nv_tools.tbz2"
++	"nvidia_drivers.tbz2"
++	"weston.tbz2"
++)
++# if "true", prints extra debug info
++DEBUG="false"
++# flag used to switch between legacy overlay packages and debians
++# default is debians, but can be switched to overlay by setting to "true"
++USE_TARGET_OVERLAY_DEFAULT=
++BSP_DIR="${THIS_DIR}"
++
++function ShowDebug {
++	echo "${SCRIPT_NAME} debug info:"
++	echo "BSP_DIR=${BSP_DIR}"
++	echo "DEB_SCRIPT_NAME=${DEB_SCRIPT_NAME}"
++	echo "DEBUG=${DEBUG}"
++	echo "LDK_BOOTLOADER_DIR=${LDK_BOOTLOADER_DIR}"
++	echo "LDK_KERN_DIR=${LDK_KERN_DIR}"
++	echo "LDK_NV_TEGRA_DIR=${LDK_NV_TEGRA_DIR}"
++	echo "LDK_ROOTFS_DIR=${LDK_ROOTFS_DIR}"
++	echo "THIS_DIR=${THIS_DIR}"
++	echo "THIS_USER=${THIS_USER}"
++	echo "USE_TARGET_OVERLAY_DEFAULT=${USE_TARGET_OVERLAY_DEFAULT}"
++	set -ex
++}
+ 
++function ShowUsage {
+     echo "Use: $1 [--bsp|-b PATH] [--root|-r PATH] [--target-overlay] [--help|-h]"
+ cat <<EOF
+     This script installs tegra binaries
+@@ -54,42 +92,15 @@
+ EOF
+ }
+ 
+-function ShowDebug {
+-    echo "SCRIPT_NAME     : $SCRIPT_NAME"
+-    echo "DEB_SCRIPT_NAME : $DEB_SCRIPT_NAME"
+-    echo "LDK_ROOTFS_DIR  : $LDK_ROOTFS_DIR"
+-    echo "BOARD_NAME      : $TARGET_BOARD"
+-}
+-
+-function ReplaceText {
+-	sed -i "s/$2/$3/" $1
+-	if [ $? -ne 0 ]; then
+-		echo "Error while editing a file. Exiting !!"
++function FailIfRoot() {
++	if [ "${THIS_USER}" == "root" ]; then
++		echo "This script should not be run as root"
+ 		exit 1
+ 	fi
+ }
+-# if the user is not root, there is not point in going forward
+-THISUSER=`whoami`
+-if [ "x$THISUSER" != "xroot" ]; then
+-    echo "This script requires root privilege"
+-    exit 1
+-fi
+-
+-# script name
+-SCRIPT_NAME=`basename $0`
+-
+-# apply .deb script name
+-DEB_SCRIPT_NAME="nv-apply-debs.sh"
+-
+-# empty root and no debug
+-DEBUG=
+-
+-# flag used to switch between legacy overlay packages and debians
+-# default is debians, but can be switched to overlay by setting to "true"
+-USE_TARGET_OVERLAY_DEFAULT=
+ 
+ # parse the command line first
+-TGETOPT=`getopt -n "$SCRIPT_NAME" --longoptions help,bsp:,debug,target-overlay,root: -o b:dhr:b:t: -- "$@"`
++TGETOPT=$(getopt -n "$SCRIPT_NAME" --longoptions help,bsp:,debug,target-overlay,root: -o b:dhr:b:t: -- "$@")
+ 
+ if [ $? != 0 ]; then
+     echo "Terminating... wrong switch"
+@@ -97,7 +108,7 @@
+     exit 1
+ fi
+ 
+-eval set -- "$TGETOPT"
++eval set -- "${TGETOPT}"
+ 
+ while [ $# -gt 0 ]; do
+     case "$1" in
+@@ -105,7 +116,7 @@
+ 	-h|--help) ShowUsage "$SCRIPT_NAME"; exit 1 ;;
+ 	-d|--debug) DEBUG="true" ;;
+ 	-t|--target-overlay) TARGET_OVERLAY="true" ;;
+-	-b|--bsp) BSP_LOCATION_DIR="$2"; shift ;;
++	-b|--bsp) BSP_DIR="$2"; shift ;;
+ 	--) shift; break ;;
+ 	-*) echo "Terminating... wrong switch: $@" >&2 ; ShowUsage "$SCRIPT_NAME"; exit 1 ;;
+     esac
+@@ -117,26 +128,29 @@
+     exit 1
+ fi
+ 
+-# done, now do the work, save the directory
+-LDK_DIR=$(cd `dirname $0` && pwd)
++# fail if the current user is root
++FailIfRoot
++
++LDK_NV_TEGRA_DIR="${BSP_DIR}/nv_tegra"
++LDK_KERN_DIR="${BSP_DIR}/kernel"
++LDK_BOOTLOADER_DIR="${BSP_DIR}/bootloader"
+ 
+ # use default rootfs dir if none is set
+ if [ -z "$LDK_ROOTFS_DIR" ]; then
+-    LDK_ROOTFS_DIR="${LDK_DIR}/rootfs"
++	LDK_ROOTFS_DIR="${BSP_DIR}/rootfs"
+ fi
+ 
+-echo "Using rootfs directory of: ${LDK_ROOTFS_DIR}"
+-
+-install -o 0 -g 0 -m 0755 -d "${LDK_ROOTFS_DIR}"
+-
+ # get the absolute path, for LDK_ROOTFS_DIR.
+ # otherwise, tar behaviour is unknown in last command sets
+-TOP=$PWD
+-cd "$LDK_ROOTFS_DIR"
++pushd "$LDK_ROOTFS_DIR" > /dev/null 2>&1
+ LDK_ROOTFS_DIR="$PWD"
+-cd "$TOP"
++popd > /dev/null 2>&1
++
++echo "Using rootfs directory of: ${LDK_ROOTFS_DIR}"
+ 
+-if [ ! `find "$LDK_ROOTFS_DIR/etc/passwd" -group root -user root` ]; then
++install -m 0755 -d "${LDK_ROOTFS_DIR}"
++
++if [ ! $(find "$LDK_ROOTFS_DIR/etc/passwd" -group "${THIS_USER}" -user "${THIS_USER}") ]; then
+ 	echo "||||||||||||||||||||||| ERROR |||||||||||||||||||||||"
+ 	echo "-----------------------------------------------------"
+ 	echo "1. The root filesystem, provided with this package,"
+@@ -144,7 +158,7 @@
+ 	echo "   ${LDK_ROOTFS_DIR}"
+ 	echo "-----------------------------------------------------"
+ 	echo "2. The root filesystem, provided with this package,"
+-	echo "   has to be extracted with 'sudo' to this directory:"
++	echo "   has to be extracted as your user to this directory:"
+ 	echo "   ${LDK_ROOTFS_DIR}"
+ 	echo "-----------------------------------------------------"
+ 	echo "Consult the Development Guide for instructions on"
+@@ -153,16 +167,17 @@
+ 	exit 1
+ fi
+ 
+-# assumption: this script is part of the BSP
+-#             so, LDK_DIR/nv_tegra always exist
+-LDK_NV_TEGRA_DIR="${LDK_DIR}/nv_tegra"
+-LDK_KERN_DIR="${LDK_DIR}/kernel"
+-LDK_BOOTLOADER_DIR="${LDK_DIR}/bootloader"
+-
+ if [ "${DEBUG}" == "true" ]; then
++	ShowDebug
+ 	START_TIME=$(date +%s)
+ fi
+ 
++function ExtractToRootfs() {
++	pushd "${LDK_ROOTFS_DIR}" > /dev/null 2>&1
++	tar -I lbzip2 -xpmf "${LDK_NV_TEGRA_DIR}/${1}"
++	popd > /dev/null 2>&1
++}
++
+ if [ "${TARGET_OVERLAY}" != "true" ] &&
+ 	[ "${USE_TARGET_OVERLAY_DEFAULT}" != "true" ]; then
+ 	if [ ! -f "${LDK_NV_TEGRA_DIR}/${DEB_SCRIPT_NAME}" ]; then
+@@ -174,7 +189,7 @@
+ else
+ 	# install standalone debian packages by extracting and dumping them
+ 	# into the rootfs directly for .tbz2 install flow
+-	debs=($(ls "${LDK_DIR}/tools"/*.deb))
++	debs=($(ls "${THIS_DIR}/tools"/*.deb))
+ 	for deb in "${debs[@]}"; do
+ 		dpkg -x "${deb}" "${LDK_ROOTFS_DIR}"
+ 	done
+@@ -190,38 +205,9 @@
+ 		fi
+ 	done
+ 
+-	echo "Extracting the NVIDIA user space components to ${LDK_ROOTFS_DIR}"
+-	pushd "${LDK_ROOTFS_DIR}" > /dev/null 2>&1
+-	tar -I lbzip2 -xpmf ${LDK_NV_TEGRA_DIR}/nvidia_drivers.tbz2
+-	popd > /dev/null 2>&1
+-
+-	echo "Extracting the BSP test tools to ${LDK_ROOTFS_DIR}"
+-	pushd "${LDK_ROOTFS_DIR}" > /dev/null 2>&1
+-	tar -I lbzip2 -xpmf ${LDK_NV_TEGRA_DIR}/nv_tools.tbz2
+-	popd > /dev/null 2>&1
+-
+-	echo "Extracting the NVIDIA gst test applications to ${LDK_ROOTFS_DIR}"
+-	pushd "${LDK_ROOTFS_DIR}" > /dev/null 2>&1
+-	tar -I lbzip2 -xpmf ${LDK_NV_TEGRA_DIR}/nv_sample_apps/nvgstapps.tbz2
+-	popd > /dev/null 2>&1
+-
+-	echo "Extracting Weston to ${LDK_ROOTFS_DIR}"
+-	pushd "${LDK_ROOTFS_DIR}" > /dev/null 2>&1
+-	tar -I lbzip2 -xpmf "${LDK_NV_TEGRA_DIR}/weston.tbz2"
+-	popd > /dev/null 2>&1
+-
+-	echo "Extracting the configuration files for the supplied root filesystem to ${LDK_ROOTFS_DIR}"
+-	pushd "${LDK_ROOTFS_DIR}" > /dev/null 2>&1
+-	tar -I lbzip2 -xpmf ${LDK_NV_TEGRA_DIR}/config.tbz2
+-	popd > /dev/null 2>&1
+-
+-	echo "Extracting graphics_demos to ${LDK_ROOTFS_DIR}"
+-	pushd "${LDK_ROOTFS_DIR}" > /dev/null 2>&1
+-	tar -I lbzip2 -xpmf "${LDK_NV_TEGRA_DIR}/graphics_demos.tbz2"
+-	popd > /dev/null 2>&1
+-
+-	echo "Extracting the firmwares and kernel modules to ${LDK_ROOTFS_DIR}"
+-	( cd "${LDK_ROOTFS_DIR}" ; tar -I lbzip2 -xpmf "${LDK_KERN_DIR}/kernel_supplements.tbz2" )
++	for tarball in ${TARBALLS[@]}; do
++		ExtractToRootfs ${tarball}
++	done
+ 
+ 	echo "Extracting the kernel headers to ${LDK_ROOTFS_DIR}/usr/src"
+ 	# The kernel headers package can be used on the target device as well as on another host.
+@@ -232,7 +218,7 @@
+ 	KERNEL_HEADERS_A64_DIR="$(tar tf "${LDK_KERN_DIR}/kernel_headers.tbz2" | grep "${EXTMOD_DIR}" | head -1 | cut -d/ -f1)"
+ 	KERNEL_VERSION="$(echo "${KERNEL_HEADERS_A64_DIR}" | sed -e "s/linux-headers-//" -e "s/-${EXTMOD_DIR}//")"
+ 	KERNEL_SUBDIR="kernel-$(echo "${KERNEL_VERSION}" | cut -d. -f1-2)"
+-	install -o 0 -g 0 -m 0755 -d "${LDK_ROOTFS_DIR}/usr/src"
++	install -m 0755 -d "${LDK_ROOTFS_DIR}/usr/src"
+ 	pushd "${LDK_ROOTFS_DIR}/usr/src" > /dev/null 2>&1
+ 	# This tar is packaged for the host (all files 666, dirs 777) so that when
+ 	# extracted on the host, the user's umask controls the permissions.
+@@ -250,20 +236,20 @@
+ 
+ 	if [ -e "${LDK_KERN_DIR}/zImage" ]; then
+ 		echo "Installing zImage into /boot in target rootfs"
+-		install --owner=root --group=root --mode=644 -D "${LDK_KERN_DIR}/zImage" "${LDK_ROOTFS_DIR}/boot/zImage"
++		install --mode=644 -D "${LDK_KERN_DIR}/zImage" "${LDK_ROOTFS_DIR}/boot/zImage"
+ 	fi
+ 
+ 	if [ -e "${LDK_KERN_DIR}/Image" ]; then
+ 		echo "Installing Image into /boot in target rootfs"
+-		install --owner=root --group=root --mode=644 -D "${LDK_KERN_DIR}/Image" "${LDK_ROOTFS_DIR}/boot/Image"
++		install --mode=644 -D "${LDK_KERN_DIR}/Image" "${LDK_ROOTFS_DIR}/boot/Image"
+ 	fi
+ 
+ 	echo "Installing the board *.dtb and *.dtbo files into /boot in target rootfs"
+-	install -o 0 -g 0 -m 0755 -d "${LDK_ROOTFS_DIR}"/boot
++	install -m 0755 -d "${LDK_ROOTFS_DIR}"/boot
+ 	cp -a "${LDK_KERN_DIR}"/dtb/*.dtb* "${LDK_ROOTFS_DIR}/boot"
+ fi
+ 
+-ARM_ABI_DIR=
++#ARM_ABI_DIR=
+ 
+ if [ -d "${LDK_ROOTFS_DIR}/usr/lib/arm-linux-gnueabihf/tegra" ]; then
+ 	ARM_ABI_DIR_ABS="usr/lib/arm-linux-gnueabihf"
+@@ -279,7 +265,7 @@
+ ARM_ABI_DIR="${LDK_ROOTFS_DIR}/${ARM_ABI_DIR_ABS}"
+ ARM_ABI_TEGRA_DIR="${ARM_ABI_DIR}/tegra"
+ 
+-install -o 0 -g 0 -m 0755 -d "${LDK_ROOTFS_DIR}/etc/systemd/system/multi-user.target.wants"
++install -m 0755 -d "${LDK_ROOTFS_DIR}/etc/systemd/system/multi-user.target.wants"
+ pushd "${LDK_ROOTFS_DIR}/etc/systemd/system/multi-user.target.wants" > /dev/null 2>&1
+ if [ -h "isc-dhcp-server.service" ]; then
+ 	rm -f "isc-dhcp-server.service"
+@@ -319,7 +305,7 @@
+ fi
+ 
+ echo "Copying USB device mode filesystem image to ${LDK_ROOTFS_DIR}"
+-install -o 0 -g 0 -m 0755 -d "${LDK_ROOTFS_DIR}/opt/nvidia/l4t-usb-device-mode"
++install -m 0755 -d "${LDK_ROOTFS_DIR}/opt/nvidia/l4t-usb-device-mode"
+ cp "${LDK_NV_TEGRA_DIR}/l4t-usb-device-mode-filesystem.img" "${LDK_ROOTFS_DIR}/opt/nvidia/l4t-usb-device-mode/filesystem.img"
+ 
+ # Disabling NetworkManager-wait-online.service for Bug 200290321
+@@ -376,7 +362,7 @@
+ if [ -f "${LDK_BOOTLOADER_DIR}/extlinux.conf" ]; then
+ 	echo "Installing extlinux.conf into /boot/extlinux in target rootfs"
+ 	mkdir -p "${LDK_ROOTFS_DIR}/boot/extlinux/"
+-	install --owner=root --group=root --mode=644 -D "${LDK_BOOTLOADER_DIR}/extlinux.conf" "${LDK_ROOTFS_DIR}/boot/extlinux/"
++	install --mode=644 -D "${LDK_BOOTLOADER_DIR}/extlinux.conf" "${LDK_ROOTFS_DIR}/boot/extlinux/"
+ fi
+ 
+ if [ "${DEBUG}" == "true" ]; then
+@@ -384,4 +370,5 @@
+ 	TOTAL_TIME=$((${END_TIME}-${START_TIME}))
+ 	echo "Time for applying binaries - $(date -d@${TOTAL_TIME} -u +%H:%M:%S)"
+ fi
++
+ echo "Success!"
+diff -rub ./originals/nv_tegra/nv-apply-debs.sh ./modified/nv_tegra/nv-apply-debs.sh
+--- ./originals/nv_tegra/nv-apply-debs.sh	2019-12-09 22:58:19.000000000 -0800
++++ ./modified/nv_tegra/nv-apply-debs.sh	2020-01-30 15:54:45.043556521 -0800
+@@ -31,10 +31,28 @@
+ # pointed to by L4T_ROOTFS_DIR/opt/nvidia/l4t-packages.
+ #
+ 
++readonly THIS_USER="$(whoami)"
++readonly SCRIPT_NAME="$(basename $0)"
++readonly THIS_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" >/dev/null 2>&1 && pwd )"
++
++readonly L4T_NV_TEGRA_DIR="${THIS_DIR}"
++# assumption: this script is part of the BSP and under L4T_DIR/nv_tegra
++readonly L4T_DIR="$(dirname "${L4T_NV_TEGRA_DIR}")"
++readonly L4T_KERN_DIR="${L4T_DIR}/kernel"
++readonly L4T_BOOTLOADER_DIR="${L4T_DIR}/bootloader"
++
++# the .deb destination on the rootfs:
++readonly L4T_TARGET_DEB_DIR="/opt/nvidia/l4t-packages"
++# this gets fed to proot's -q option and may include qemu options
++readonly QEMU_BIN="qemu-aarch64-static"
++
++# set this to "true" to print DEBUG by default
++DEBUG="false"
++
+ set -e
+ 
+ # show the usages text
+-function ShowUsage {
++function ShowUsage() {
+ 	local ScriptName=$1
+ 
+ 	echo "Use: sudo "${ScriptName}" [--root|-r] [--help|-h]"
+@@ -48,7 +66,24 @@
+ EOF
+ }
+ 
+-function AddDebsList {
++function ShowDebug() {
++	echo "${SCRIPT_NAME} debug info:"
++	echo "L4T_BOOTLOADER_DIR=${L4T_BOOTLOADER_DIR}"
++	echo "L4T_DIR=${L4T_DIR}"
++	echo "L4T_KERN_DIR=${L4T_KERN_DIR}"
++	echo "L4T_NV_TEGRA_DIR=${L4T_NV_TEGRA_DIR}"
++	echo "L4T_ROOTFS_DEB_DIR=${L4T_ROOTFS_DEB_DIR}"
++	echo "L4T_ROOTFS_DIR=${L4T_ROOTFS_DIR}"
++	echo "QEMU_BIN=${QEMU_BIN}"
++	echo "THIS_DIR=${THIS_DIR}"
++	echo "THIS_USER=${THIS_USER}"
++	set -ex
++}
++
++# pre_deb_list includes Debian packages which must be installed before deb_list
++pre_deb_list=()
++deb_list=()
++function AddDebsList() {
+ 	local category="${1}"
+ 
+ 	if [ -z "${category}" ]; then
+@@ -66,23 +101,23 @@
+ 	done
+ }
+ 
+-# if the user is not root, there is not point in going forward
+-THISUSER=`whoami`
+-if [ "${THISUSER}" != "root" ]; then
+-	echo "This script requires root privilege"
++function FailIfRoot() {
++	if [ "${THIS_USER}" == "root" ]; then
++		echo "This script should not be run as root"
+ 	exit 1
+-fi
++	fi
++}
+ 
+ # parse the command line first
+-TGETOPT=`getopt -n "$SCRIPT_NAME" --longoptions help,root: \
+--o hcr: -- "$@"`
++TGETOPT=$(getopt -n "${SCRIPT_NAME}" --longoptions help,root: -o hcr: -- "$@")
+ 
+-eval set -- "$TGETOPT"
++eval set -- "${TGETOPT}"
+ 
+ while [ $# -gt 0 ]; do
+ 	case "$1" in
+ 	-h|--help) ShowUsage "$SCRIPT_NAME"; exit 1 ;;
+ 	-r|--root) L4T_ROOTFS_DIR="$2" ;;
++	-d|--debug) DEBUG="true" ;;
+ 	--) shift; break ;;
+ 	-*) echo "Terminating... wrong switch: $@" >&2 ; ShowUsage "$SCRIPT_NAME"; \
+ 	exit 1 ;;
+@@ -95,17 +130,9 @@
+ 	exit 1
+ fi
+ 
+-# done, now do the work, save the directory
+-L4T_NV_TEGRA_DIR=$(cd `dirname $0` && pwd)
+-
+-# assumption: this script is part of the BSP and under L4T_DIR/nv_tegra
+-L4T_DIR="${L4T_NV_TEGRA_DIR}/.."
+-L4T_KERN_DIR="${L4T_DIR}/kernel"
+-L4T_BOOTLOADER_DIR="${L4T_DIR}/bootloader"
+-
+ # check if the dir holding Debian packages exists in the BSP
+ if [ ! -d "${L4T_NV_TEGRA_DIR}/l4t_deb_packages" ]; then
+-    echo "Debian packages are curently not supported"
++	echo "No debian packages found. Bad BSP tarball?"
+     exit 1
+ fi
+ 
+@@ -117,22 +144,26 @@
+ echo "Root file system directory is ${L4T_ROOTFS_DIR}"
+ 
+ # dir on target rootfs to keep Debian packages prior to installation
+-L4T_TARGET_DEB_DIR="/opt/nvidia/l4t-packages"
+ L4T_ROOTFS_DEB_DIR="${L4T_ROOTFS_DIR}${L4T_TARGET_DEB_DIR}"
+ 
++if [ "${DEBUG}" == "true" ]; then
++	ShowDebug
++fi
++
++# fail if the current user is root
++FailIfRoot
++
+ # copy debian packages and installation script to rootfs
+ echo "Copying public debian packages to rootfs"
+-mkdir -p "${L4T_ROOTFS_DEB_DIR}/userspace"
+-mkdir -p "${L4T_ROOTFS_DEB_DIR}/kernel"
+-mkdir -p "${L4T_ROOTFS_DEB_DIR}/bootloader"
+-mkdir -p "${L4T_ROOTFS_DEB_DIR}/standalone"
+-# pre_deb_list includes Debian packages which must be installed before
+-# deb_list
+-pre_deb_list=()
+-deb_list=()
+-
+-cp "${L4T_DIR}/tools"/*.deb "${L4T_ROOTFS_DEB_DIR}/standalone"
+-AddDebsList "standalone"
++install -m 755 -d "${L4T_ROOTFS_DEB_DIR}/userspace"
++install -m 755 -d "${L4T_ROOTFS_DEB_DIR}/kernel"
++install -m 755 -d "${L4T_ROOTFS_DEB_DIR}/bootloader"
++install -m 755 -d "${L4T_ROOTFS_DEB_DIR}/standalone"
++
++# todo: fix or defer python-jetson-gpio installation
++#  which fails with exec format error if uncommented:
++#cp "${L4T_DIR}/tools"/*.deb "${L4T_ROOTFS_DEB_DIR}/standalone"
++#AddDebsList "standalone"
+ cp "${L4T_NV_TEGRA_DIR}/l4t_deb_packages"/*.deb \
+ "${L4T_ROOTFS_DEB_DIR}/userspace"
+ AddDebsList "userspace"
+@@ -164,54 +195,32 @@
+ 	"${L4T_ROOTFS_DIR}/etc/"
+ fi
+ 
+-echo "Start L4T BSP package installation"
+-# Try the stashed copy which should be packed in customer_release.tbz2 first
+-if [ -f "${L4T_DIR}/../qemu-aarch64-static" ]; then
+-	QEMU_BIN="${L4T_DIR}/../qemu-aarch64-static"
+-elif [ -f "${L4T_NV_TEGRA_DIR}/qemu-aarch64-static" ]; then
+-	QEMU_BIN="${L4T_NV_TEGRA_DIR}/qemu-aarch64-static"
+-else
+-	echo "QEMU binary is not available, looking for QEMU from host system"
+-	if [ -f "/usr/bin/qemu-aarch64-static" ]; then
+-		echo "Found /usr/bin/qemu-aarch64-static"
+-		QEMU_BIN="/usr/bin/qemu-aarch64-static"
+-	fi
+-
+-	if [ -z "${QEMU_BIN}" ]; then
+-		echo "ERROR qemu not found! To install - please run: " \
+-			"\"sudo apt-get install qemu-user-static\""
+-		exit 1
+-	fi
+-fi
+-echo "Installing QEMU binary in rootfs"
+-install --owner=root --group=root "${QEMU_BIN}" "${L4T_ROOTFS_DIR}/usr/bin/"
++function ProotRun() {
++	# -S can't be used because nvidia-l4t-init modifies /etc/hosts
++	proot -0 -r "${L4T_ROOTFS_DIR}" -w / -q "${QEMU_BIN}" \
++		-b /dev \
++		-b /etc/host.conf \
++		-b /proc \
++		-b /sys \
++		-b /tmp \
++		"$@"
++}
+ 
++echo "Start L4T BSP package installation"
+ echo "Installing Jetson OTA server key in rootfs"
+-install --owner=root --group=root \
+-	"${L4T_NV_TEGRA_DIR}/jetson-ota-public.key" \
+-	"${L4T_ROOTFS_DIR}/etc/apt"
+-pushd "${L4T_ROOTFS_DIR}"
+-echo "Registering Jetson OTA server key"
+-LC_ALL=C chroot . mount -t proc none /proc
+-LC_ALL=C APT_KEY_DONT_WARN_ON_DANGEROUS_USAGE=1 chroot . apt-key add "/etc/apt/jetson-ota-public.key"
+-umount ${L4T_ROOTFS_DIR}/proc
+-popd
+-echo "Removing Jetson OTA server key from rootfs"
+-rm -f "${L4T_ROOTFS_DIR}/etc/apt/jetson-ota-public.key"
++install -m 644 -T "${L4T_NV_TEGRA_DIR}/jetson-ota-public.key" \
++	"${L4T_ROOTFS_DIR}/etc/apt/trusted.gpg.d/jetson-ota-public.asc"
+ 
+ pushd "${L4T_ROOTFS_DIR}"
+ touch "${L4T_ROOTFS_DEB_DIR}/.nv-l4t-disable-boot-fw-update-in-preinstall"
+ echo "Installing BSP Debian packages in ${L4T_ROOTFS_DIR}"
+ if [ "${#pre_deb_list[@]}" -ne 0 ]; then
+-	LC_ALL=C chroot . dpkg -i --path-include="/usr/share/doc/*" "${pre_deb_list[@]}"
++	LC_ALL=C ProotRun dpkg -i --path-include="/usr/share/doc/*" "${pre_deb_list[@]}"
+ fi
+-LC_ALL=C chroot . dpkg -i --path-include="/usr/share/doc/*" "${deb_list[@]}"
++LC_ALL=C ProotRun dpkg -i --path-include="/usr/share/doc/*" "${deb_list[@]}"
+ rm -f "${L4T_ROOTFS_DEB_DIR}/.nv-l4t-disable-boot-fw-update-in-preinstall"
+ popd
+ 
+-echo "Removing QEMU binary from rootfs"
+-rm -f "${L4T_ROOTFS_DIR}/usr/bin/qemu-aarch64-static"
+-
+ echo "Removing stashed Debian packages from rootfs"
+ rm -rf "${L4T_ROOTFS_DEB_DIR}"
+ 
+diff -rub ./originals/tools/jetson-disk-image-creator.sh ./modified/tools/jetson-disk-image-creator.sh
+--- ./originals/tools/jetson-disk-image-creator.sh	2019-12-09 22:58:19.000000000 -0800
++++ ./modified/tools/jetson-disk-image-creator.sh	2020-01-30 16:23:12.308373159 -0800
+@@ -66,8 +66,8 @@
+ function check_pre_req()
+ {
+ 	this_user="$(whoami)"
+-	if [ "${this_user}" != "root" ]; then
+-		echo "ERROR: This script requires root privilege" > /dev/stderr
++	if [ "${this_user}" == "root" ]; then
++		echo "ERROR: This script may not be run as root" > /dev/stderr
+ 		usage
+ 		exit 1
+ 	fi

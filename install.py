@@ -14,7 +14,7 @@ def install(prefix=None, no_requirements_check=False):
     if not no_requirements_check:
         tegrity.utils.ensure_system_requirements()
     this_dir = os.path.dirname(__file__)
-    command = [PIP3, 'install', '--upgrade', '--no-cache']
+    command = [PIP3, 'install', '--upgrade', '--isolated', '--no-cache']
     if prefix:
         command.extend(['--prefix', prefix])
     command.append(this_dir)

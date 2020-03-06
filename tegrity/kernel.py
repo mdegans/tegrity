@@ -22,11 +22,14 @@ import hashlib
 import logging
 import os
 import tempfile
+import urllib.parse
+import tarfile
 
 import tegrity
 
 from typing import (
     Iterable,
+    Mapping,
 )
 
 from tegrity.settings import (
@@ -84,6 +87,55 @@ def download_source(public_sources: str, source_dir,
             raise FileNotFoundError(
                 f"{err.filename} not found in tarball. Bad url?"
             )
+
+
+def validate_kwargs(kwargs: Mapping) -> Mapping:
+    logger.debug(f"validating kwargs: {kwargs}")
+    try:
+        if 'cross_prefix' in kwargs:
+            tegrity.toolchain.validate_cross_prefix(kwargs['cross_prefix'])
+        if 'public_sources' in kwargs:
+            validate_public_sources(kwargs['public_sources'])
+        if 'public_sources_sha512' in kwargs:
+            validate_public_sources_sha512(kwargs['public_sources_sha512'])
+        if 'load_kconfig' in kwargs:
+            validate_load_kconfig(kwargs['load_kconfig'])
+        if 'save_config' in kwargs:
+            validate_save_config(kwargs['save_config'])
+    except Exception as err:
+        raise tegrity.err.ValidationError("invalid argument") from err
+    return kwargs
+
+
+def validate_public_sources(public_sources: str):
+    try:
+        logger.debug(f'validating {public_sources} is a tarball')
+        with tarfile.open(public_sources) as tarball:
+            return
+    except FileNotFoundError as err:
+        logger.debug(f'validating {public_sources} is valid url')
+        urllib.parse.urlparse(public_sources)
+        return
+
+
+def validate_public_sources_sha512(sha):
+    if len(sha) != 128:
+        raise tegrity.err.ValidationError(f"sha512 length not 128")
+
+
+def validate_load_kconfig(filename):
+    with open(filename) as f:
+        return
+
+
+def validate_save_config(filename):
+    dir = os.path.dirname(filename)
+    if not os.path.exists(dir):
+        raise FileNotFoundError(f"{dir} does not exist")
+    if not os.path.isdir(dir):
+        raise NotADirectoryError(f"{dir} not a directory")
+    if not os.access(dir, os.W_OK):
+        raise PermissionError(f'{dir} not writable')
 
 
 # this is following the instructions from:
@@ -288,7 +340,7 @@ def cli_main():
         "mis-configured).", action='store_true')
 
     # add --log-file and --verbose
-    build(**tegrity.cli.cli_common(ap))
+    build(**validate_kwargs(tegrity.cli.cli_common(ap)))
 
 
 if __name__ == '__main__':

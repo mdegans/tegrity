@@ -22,7 +22,16 @@ logger = logging.getLogger(__name__)
 
 def configure_logging(kwargs: MutableMapping) -> MutableMapping:
     # configure logging
-    fh = logging.FileHandler(kwargs['log_file'])
+    try:
+        fh = logging.FileHandler(kwargs['log_file'])
+    except (PermissionError, FileNotFoundError) as err:
+        try:
+            fh = logging.FileHandler(os.path.join(os.getcwd(), 'tegrity.log'))
+        except PermissionError:
+            try:
+                fh = logging.FileHandler(os.path.join('/tmp', 'tegrity.log'))
+            except OSError as err:
+                logger.error("Could not create log file!!!", err)
     fh.setLevel(logging.DEBUG)
     fh.setFormatter(logging.Formatter(
         '%(asctime)s::%(levelname)s::%(name)s::%(message)s'))

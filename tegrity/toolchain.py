@@ -68,6 +68,14 @@ def get_cross_prefix() -> Optional[str]:
     return cross_prefix
 
 
+def validate_cross_prefix(cross_prefix: str):
+    logger.debug(f'validating CROSS_PREFIX: {cross_prefix}')
+    gcc = f'{cross_prefix}gcc'
+    if not os.path.isfile(gcc):
+        raise FileNotFoundError(f'gcc not found at {gcc}')
+    # todo: validate gcc is valid version
+
+
 # noinspection PyUnresolvedReferences
 def install_from_tarball(
         install_path: os.PathLike = DEFAULT_TARBALL_INSTALL_PREFIX) -> str:

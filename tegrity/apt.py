@@ -229,12 +229,43 @@ def autoremove(runner=tegrity.utils) -> subprocess.CompletedProcess:
     return runner.run(('apt-get', 'autoremove'))
 
 
-def autoremove(runner: tegrity.qemu.QemuRunner = None):
-    command = ('apt-get', 'autoremove')
-    if runner:
-        return runner.run_cmd(command)
-    else:
-        return tegrity.utils.run(command)
+def _fix_sources(rootfs, board_id):
+    sources_list = os.path.join(rootfs, *tegrity.settings.NV_SOURCES_LIST)
+    logger.debug(f"overwriting {sources_list}")
+    try:
+        with open(sources_list, 'w') as sources_list:
+            soc = tegrity.settings.BOARD_ID_TO_SOC[board_id]
+            sources_list.write(
+                tegrity.settings.NV_SOURCES_LIST_TEMPLATE.format(soc=soc))
+    except FileNotFoundError as err:
+        raise FileNotFoundError(
+            f"could not find {sources_list} in rootfs") from err
+
+
+def _install_ota_key(rootfs):
+    logger.debug(f'installing ota key on rootfs: {rootfs}')
+    rootfs = pathlib.Path(rootfs)
+    # really, this should be from a keyserver
+    key = rootfs.parent.joinpath('nv_tegra', 'jetson-ota-public.key')
+    logger.debug(f'ota key source: {key}')
+    tegrity.download.verify(
+        key, tegrity.settings.JETSON_OTA_KEY_SHA512, hashlib.sha512)
+    dest = rootfs.joinpath(
+        'etc', 'apt', 'trusted.gpg.d', 'jetson-ota-public.asc')
+    logger.debug(f'ota key dest: {dest}')
+    try:
+        tegrity.utils.remove(dest)
+    except FileNotFoundError:
+        pass
+    tegrity.utils.copy(key, dest)
+
+
+def enable_nvidia_ota(rootfs):
+    """patches apt sources on a |rootfs| to enable ota updates. For now, the apt
+    key must already be installed (apply_binaries.sh does this)"""
+    board_id = tegrity.db.autodetect_hwid(pathlib.Path(rootfs).parent)
+    _install_ota_key(rootfs)
+    _fix_sources(rootfs, board_id)
 
 
 def ensure_requirements():

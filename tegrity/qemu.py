@@ -23,10 +23,11 @@
 # many thanks to this wiki:
 # https://wiki.debian.org/QemuUserEmulation
 
-import os
+import getpass
 import logging
-import subprocess
+import os
 import shutil
+import subprocess
 
 from typing import (
     Dict,
@@ -44,6 +45,8 @@ logger = logging.getLogger(__name__)
 
 # default arch (used to find qemu static binary)
 ARCH = 'aarch64'
+# explicit path to proot:
+PROOT = '/usr/bin/proot'
 
 
 def default_mount_kwargs(rootfs: str) -> List[Dict[str, Union[List[str], str]]]:
@@ -67,6 +70,7 @@ def default_mount_kwargs(rootfs: str) -> List[Dict[str, Union[List[str], str]]]:
 
     :param rootfs: path to the rootfs
     """
+    rootfs = os.path.abspath(rootfs)
     run_resolv = os.path.join(rootfs, 'run', 'resolvconf', 'resolv.conf')
     etc_resolv = os.path.join(rootfs, 'etc', 'resolv.conf')
     if os.path.exists(run_resolv) and os.path.islink(etc_resolv):
@@ -133,6 +137,72 @@ def default_mount_kwargs(rootfs: str) -> List[Dict[str, Union[List[str], str]]]:
     return list_of_kwargs
 
 
+class ProotRunner(object):
+    def __init__(self, rootfs: Union[str, os.PathLike],
+                 arch: str = ARCH,
+                 **kwargs):
+        """
+        Similar to QemuRunner, however does not require root privileges. The
+        rootfs must be extracted as the same user running this for it to work.
+
+        :param rootfs: the rootfs to enter. uses -S option with proot so package
+        manager works.
+        :param arch: the architecture of qemu binary to use (qemu-|arch|-static)
+        :param kwargs: are ignored
+        """
+        self.rootfs = os.path.abspath(str(rootfs))
+        self.arch = arch
+        for k, v in kwargs.items():
+            logger.debug(
+                f'{self.__class__.__name__} ignored not implemented kwarg: {k}')
+        self._scripts = []  # deleted from rootfs /tmp on __exit__
+
+    @property
+    def base_command(self):
+        command = [
+            PROOT,
+            '-S', self.rootfs,
+            '-w', '/',
+        ]
+        # so it works natively on self.arch:
+        if tegrity.settings.NATIVE_ARCH != self.arch:
+            command.extend(('-q', f'qemu-{self.arch}-static'))
+        return command
+
+    @property
+    def tmp(self):
+        return os.path.join(self.rootfs, 'tmp')
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        if exc_type:
+            logger.error(
+                f"{self.__class__.__name__} had error. Cleaning up.",
+                exc_info=(exc_type, exc_val, exc_tb)
+            )
+        for script in self._scripts:
+            try:
+                tegrity.utils.remove(script)
+            except Exception as err:
+                logger.error(f"removing {script} failed", err)
+
+    def run(self, command: Iterable, **kwargs):
+        command = (*self.base_command, *command)
+        return tegrity.utils.run(command, **kwargs)
+
+    def enter_chroot(self, **__):
+        tegrity.utils.run((*self.base_command, "/bin/bash"))
+
+    def run_script(self, script, *options, **__) -> subprocess.CompletedProcess:
+        dest = os.path.join(self.tmp, script)
+        tegrity.utils.copy(script, dest)
+        self._scripts.append(dest)
+        dest_in_chroot = os.path.join('/tmp', script)
+        return self.run((dest_in_chroot, *options))
+
+
 class QemuRunner(object):
     def __init__(self, rootfs: Union[str, os.PathLike],
                  arch: str = ARCH,
@@ -150,15 +220,16 @@ class QemuRunner(object):
         with the rootfs parameter supplied.
         :type mount_kwargs: Iterable[Mapping[str, Union[Iterable[str], str]]]
         :param additional_mounts: extends the default mounts, in the same format
-        as mount_kwargs
-        __exit__ in reverse order.
+        as mount_kwargs. Will be unmounted on __exit__ in reverse order.
         :type additional_mounts: Iterable[Mapping[str, Union[Iterable[str], str]]]
         :param userspec: USER:GROUP string (see chroot manual)
         """
         # all this checking is perhaps not pythonic, but in this case it is
         # perhaps better to fail fast than start mounting and running
         # things.
-        self.rootfs = str(rootfs)
+        self.rootfs = os.path.abspath(str(rootfs))
+        if not os.path.exists(self.rootfs):
+            raise FileNotFoundError(f'{self.rootfs} not found.')
         if not os.path.isdir(self.rootfs):
             raise NotADirectoryError(
                 f"{self.rootfs} needs to be a rootfs directory "
@@ -188,6 +259,7 @@ class QemuRunner(object):
                 raise ValueError("Userspec format invalid. see chroot manual")
         self.userspec = userspec
         self.tmp = os.path.join(rootfs, 'tmp')
+        self.sudo = 'root' != getpass.getuser()
         self._qemu_copied = False
         self._mounted = []  # unmounted on __exit__
         self._scripts = []  # deleted from rootfs /tmp on __exit__
@@ -196,23 +268,28 @@ class QemuRunner(object):
         try:
             # copy qemu to rootfs, if it doesn't exist on rootfs,
             # otherwise bind mount it, so as not to overwrite.
-            target = os.path.join(
-                self.rootfs, 'usr', 'bin', os.path.basename(self.qemu))
+            target = os.path.abspath(os.path.join(
+                self.rootfs, 'usr', 'bin', os.path.basename(self.qemu)))
 
             if os.path.isfile(target):
                 tegrity.utils.mount(
-                    self.qemu, target, options=['bind', 'ro']
+                    self.qemu, target, options=['bind', 'ro'],
+                    sudo=self.sudo,
                 ).check_returncode()
                 self._mounted.append(target)
 
             else:
-                tegrity.utils.copy(self.qemu, target)
+                tegrity.utils.run(
+                    ('cp', self.qemu, target),
+                    sudo=self.sudo
+                )
                 self._qemu_copied = target
 
-            # mount filesystems
+            # mount filesystems, and remember mounted
             for kwargs in self.mount_kwargs:
                 target = kwargs['target']
-                tegrity.utils.mount(**kwargs).check_returncode()
+                tegrity.utils.mount(
+                    sudo=self.sudo, **kwargs).check_returncode()
                 self._mounted.append(target)
 
         # if there were *any* errors, clean up and raise
@@ -226,17 +303,17 @@ class QemuRunner(object):
     def __exit__(self, exc_type, exc_val, exc_tb):
         if exc_type:
             logger.error(
-                f"QemuRunner had error. Cleaning up.",
+                f"{self.__class__.__name__} had error. Cleaning up.",
                 exc_info=(exc_type, exc_val, exc_tb)
             )
         if self._qemu_copied:
-            tegrity.utils.remove(self._qemu_copied)
+            tegrity.utils.run(('rm', self._qemu_copied), sudo=self.sudo)
         # unmount filesystems in reverse order
         for mount in reversed(self._mounted):
-            tegrity.utils.umount(mount)
+            tegrity.utils.umount(mount, sudo=self.sudo)
         for script in self._scripts:
             try:
-                tegrity.utils.remove(script)
+                tegrity.utils.run(('rm', script), sudo=self.sudo)
             except Exception as err:
                 logger.error(f"removing {script} failed", err)
 
@@ -251,28 +328,30 @@ class QemuRunner(object):
 
     def enter_chroot(self, userspec: Optional[str] = None):
         tegrity.utils.run(
-            self._base_command(userspec=userspec)
+            (*self._base_command(userspec=userspec), '/bin/bash'), sudo=self.sudo,
         ).check_returncode()
 
-    def run_cmd(self, command: Iterable, userspec=None,
-                **kwargs) -> subprocess.CompletedProcess:
+    def run(self, command: Iterable, userspec=None,
+            **kwargs) -> subprocess.CompletedProcess:
         cmd = self._base_command(userspec=userspec)
         cmd.extend(command)
-        return tegrity.utils.run(command, **kwargs)
+        return tegrity.utils.run(cmd, sudo=self.sudo, **kwargs)
 
     def run_script(self, script, *options,
                    userspec: Optional[str] = None,
+                   pkexec=False,
                    ) -> subprocess.CompletedProcess:
         dest = os.path.join(self.tmp, script)
-        tegrity.utils.copy(script, dest)
+        tegrity.utils.run(('cp', script, dest), sudo=pkexec)
         self._scripts.append(dest)
         dest_in_chroot = os.path.join('/tmp', script)
-        return self.run_cmd((dest_in_chroot, *options), userspec=userspec)
+        return self.run((dest_in_chroot, *options), userspec=userspec)
 
 
 def main(rootfs: str,
          command: Optional[Iterable[str]] = None,
          script: Optional[Sequence[str]] = None,
+         proot: Optional[bool] = None,
          enter: Optional[bool] = None,
          arch: str = None,
          qemu: str = None,
@@ -280,14 +359,15 @@ def main(rootfs: str,
     if not (enter or command or script):
         raise ValueError(
             "command and/or scripts must be supplied, and/or enter True")
-    with QemuRunner(
+    runner_cls = ProotRunner if proot else QemuRunner
+    with runner_cls(
             rootfs,
             userspec=userspec,
             arch=arch,
             qemu=qemu,
     ) as runner:
         if command:
-            runner.run_cmd(command)
+            runner.run(command)
         if script:
             runner.run_script(*script)
         if enter:
@@ -310,6 +390,10 @@ def cli_main():
         '--script', help="run a script (with optional arguments)",
         nargs='+')
     ap.add_argument(
+        '--proot', help="use proot instead of chroot (no need to run with sudo)",
+        action='store_true',
+        default=tegrity.settings.IN_DOCKER,)
+    ap.add_argument(
         '--enter', help='run commands interactively in chroot',
         action='store_true')
     ap.add_argument(
@@ -322,11 +406,8 @@ def cli_main():
         '--qemu', help="path to custom qemu static binary to copy or bind mount "
         "into the rootfs (default is the one found in path using --arch)")
 
-    # ensure requirements are met
-    tegrity.apt.ensure_requirements()
-
     # add --log-file and --verbose
-    main(**tegrity.cli.cli_common(ap))
+    main(**tegrity.cli.cli_common(ap, ensure_sudo=False))
 
 
 if __name__ == '__main__':

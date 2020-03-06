@@ -40,7 +40,7 @@ import tegrity
 # noinspection PyProtectedMember
 from tegrity.firstboot import (
     _yes_or_no as yes_or_no,
-    _run_one as run,
+    _run as run,
     _mkdir as mkdir,
     _chmod as chmod,
     _copy as copy,
@@ -161,6 +161,7 @@ def estimate_size(folder) -> int:
 def mount(source, target,
           type_: Optional[str] = None,
           options: Optional[Iterable[str]] = None,
+          sudo=False,
           ) -> subprocess.CompletedProcess:
     logger.info(f"Mounting {target}")
     command = ['mount']
@@ -170,17 +171,18 @@ def mount(source, target,
         command.append('-o')
         command.append(','.join(sorted(options)))
     command.extend((source, target))
-    return tegrity.utils.run(command)
+    return tegrity.utils.run(command, sudo=sudo)
 
 
-def umount(target) -> subprocess.CompletedProcess:
+def umount(target, sudo=False) -> subprocess.CompletedProcess:
     """
     unmounts a target path
     :arg target: the target to unmount
+    :param sudo: elevate privileges using pkexec
     :return: subprocess.CompletedProcess of the unmount command
     """
     logger.info(f"Unmounting: {target}")
-    return tegrity.utils.run(('umount', target))
+    return tegrity.utils.run(('umount', target), sudo=sudo)
 
 
 def ensure_sudo() -> str:

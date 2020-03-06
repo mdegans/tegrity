@@ -31,11 +31,8 @@ from typing import (
 import tegrity
 
 from tegrity.settings import (
-    BOARD_ID_TO_SOC,
     L4T_ROOTFS_SHA512,
     L4T_ROOTFS_URL,
-    NV_SOURCES_LIST,
-    NV_SOURCES_LIST_TEMPLATE,
     UBUNTU_BASE_SHA_256,
     UBUNTU_BASE_URL,
 
@@ -50,17 +47,6 @@ logger = logging.getLogger(__name__)
 
 # todo: cache downloads in ~/.tegrity to avoid hammering Nvidia's servers
 
-def modify_sources(rootfs, board_id):
-    sources_list = os.path.join(rootfs, *NV_SOURCES_LIST)
-    logger.debug(f"overwriting {sources_list}")
-    try:
-        with open(sources_list, 'w') as sources_list:
-            soc = BOARD_ID_TO_SOC[board_id]
-            sources_list.write(NV_SOURCES_LIST_TEMPLATE.format(soc=soc))
-    except FileNotFoundError as err:
-        raise FileNotFoundError(
-            f"could not find {sources_list} in rootfs") from err
-
 
 def get_path(bundle: sqlite3.Row):
     """:returns: the path to the rootfs of the |bundle|"""
@@ -68,6 +54,7 @@ def get_path(bundle: sqlite3.Row):
     return tegrity.utils.join_and_check(l4t_path, "rootfs")
 
 
+# noinspection PyIncorrectDocstring
 def ubuntu_base_reset(rootfs: str, source: str = None, sha256: str = None):
     """resets a |rootfs| to ubuntu base if not |source|
     :param sha256: the sha256 of the paremeter. Deprecated in favor of automatic
@@ -185,9 +172,7 @@ def main(rootfs,
                 f"script on your rootfs manually.") from err
     if fix_sources:
         try:
-            modify_sources(
-                rootfs,
-                tegrity.db.autodetect_hwid(pathlib.Path(rootfs).parent))
+            tegrity.apt.enable_nvidia_ota(rootfs)
         except Exception as err:
             raise RuntimeError(
                 "Failed to modify apt sources on rootfs.") from err
@@ -209,17 +194,22 @@ def cli_main():
     ap.add_argument(
         '--source-sha512', help="if specifying a url, verifies the download with "
         "this sha512 hexdigest")
-    ap.add_argument(
-        '--apply-binaries', help="runs apply_binaries.sh", action='store_true',
-        dest='do_apply_binaries')
-    ap.add_argument(
-        '--target-overlay', help="option for apply_binaries.sh (use if you've "
-        "customized your kernel)", action='store_true')
+    # disabling temporarily since apply_binaries.sh currently has issues
+    # todo: make alternative to:
+    #  - extract kernel, modules
+    #  - install apt key
+    #  - patch apt sources
+    # ap.add_argument(
+    #     '--apply-binaries', help="runs apply_binaries.sh", action='store_true',
+    #     dest='do_apply_binaries')
+    # ap.add_argument(
+    #     '--target-overlay', help="option for apply_binaries.sh (use if you've "
+    #     "customized your kernel)", action='store_true')
     ap.add_argument(
         '--fix-sources', help="patches nvidia apt source.list so updates work "
         "before first boot.", action='store_true')
 
-    main(**tegrity.cli.cli_common(ap))
+    main(**tegrity.cli.cli_common(ap, ensure_sudo=False))
 
 
 if __name__ == '__main__':

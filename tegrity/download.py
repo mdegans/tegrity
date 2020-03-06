@@ -141,7 +141,9 @@ def verify(file: Union[str, os.PathLike],
            hasher: Callable,
            chunk_size=2 ** 25):
     """verifies a downloaded file using hashlib"""
-    logger.debug(f"Using {hasher.name} to verify archive.")
+    logger.debug(f'Verifying {file}')
+    hasher = hasher()
+    logger.debug(f"Using {hasher.name} to verify file.")
     logger.debug(f"Expecting hex digest: {hexdigest}")
     with open(file, 'rb') as f:
         chunk = f.read(chunk_size)

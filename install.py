@@ -8,10 +8,11 @@ logger = logging.getLogger(__name__)
 PIP3 = '/usr/bin/pip3'
 
 
-def install(prefix=None):
+def install(prefix=None, no_requirements_check=False):
     """installs tegrity using pip3 to prefix"""
     logger.info(f"Installing {tegrity.__name__}")
-    tegrity.utils.ensure_system_requirements()
+    if not no_requirements_check:
+        tegrity.utils.ensure_system_requirements()
     this_dir = os.path.dirname(__file__)
     command = [PIP3, 'install', '--upgrade', '--no-cache']
     if prefix:
@@ -41,6 +42,8 @@ def cli_main():
     ap.add_argument('-u', '--uninstall', help="uninstalls tegrity",
                     action='store_true')
     ap.add_argument('--prefix', help='override prefix (see pip manual)')
+    ap.add_argument('--no-requirements-check', help="skip requirements check",
+                    action='store_true')
 
     args = ap.parse_args()
 
@@ -49,7 +52,7 @@ def cli_main():
     if args.uninstall:
         uninstall()
         return
-    install(args.prefix)
+    install(args.prefix, args.no_requirements_check)
 
 
 if __name__ == '__main__':

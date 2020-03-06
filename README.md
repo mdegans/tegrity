@@ -120,9 +120,9 @@ script = '/path/to/a/script.sh'
 
 with tegrity.qemu.QemuRunner(rootfs) as runner:
     # the same exact interface as subprocess.run:
-    runner.run_cmd(('apt', 'update'))
+    runner.run(('apt', 'update'))
     # the userspec parameter can be used to set a user (passed to chroot)
-    runner.run_cmd(('vi', '/home/marco/.bashrc'), userspec="marco:marco")
+    runner.run(('vi', '/home/marco/.bashrc'), userspec="marco:marco")
     # .run_script can be used to copy a script to a rootfs and run it
     # (with options), deleting it afterward (untested):
     runner.run_script(script, '-o', 'output.whatever')

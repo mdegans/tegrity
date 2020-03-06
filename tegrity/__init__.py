@@ -18,9 +18,10 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
-__version__ = '0.0.3'
+__version__ = '0.0.4'
 
 import logging
+import getpass
 
 import tegrity.db
 from tegrity.settings import (
@@ -30,6 +31,7 @@ from tegrity.settings import (
 import tegrity.cli
 import tegrity.download
 import tegrity.err
+import tegrity.validators
 import tegrity.firstboot
 import tegrity.image
 import tegrity.toolchain
@@ -44,7 +46,10 @@ logger = logging.getLogger(__name__)
 
 try:
     # noinspection PyUnresolvedReferences
-    import tegrity.gui
+    if getpass.getuser() != 'root':
+        import tegrity.gui
+    else:
+        tegrity.gui = None
 except ImportError as err:
     tegrity.gui = None
     if err.name == 'gi':

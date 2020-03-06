@@ -9,7 +9,7 @@ with open(os.path.join(THIS_DIR, 'README.md')) as readme:
 
 setuptools.setup(
     name='tegrity',
-    version='0.0.3',
+    version='0.0.4',
     description='Helps bake system images for NVIDIA Tegra',
     long_description=long_description,
     long_description_content_type='text/markdown',
@@ -40,8 +40,8 @@ setuptools.setup(
     },
     entry_points={
         'console_scripts': [
-            # 'tegrity-apt=tegrity.apt:cli_main',
-            # 'tapt=tegrity.apt:cli_main',
+            'tegrity-apt=tegrity.apt:cli_main',
+            'tapt=tegrity.apt:cli_main',
             'tegrity-image=tegrity.image:cli_main',
             'tegrity-qemu=tegrity.qemu:cli_main',
             'tegrity-rootfs=tegrity.rootfs:cli_main',

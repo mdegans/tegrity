@@ -1,5 +1,6 @@
 import os
 import shutil
+import platform
 
 # the CONFIG_PATH just points to the logs, cache, and saved configurations.
 
@@ -9,6 +10,8 @@ import tegrity
 CONFIG_PATH_MODE = 0o700
 # change this if conflict with an existing ~/.tegrity folder you want to keep
 DEFAULT_CONFIG_PATH = os.path.join(os.path.expanduser("~"), f".tegrity")
+# get the native arch
+NATIVE_ARCH = platform.processor()
 
 # for download.py
 # todo: implement, since python bzip is really slow
@@ -31,6 +34,7 @@ L4T_ROOTFS_URL = "https://developer.nvidia.com/embedded/r32-2-3_Release_v1.0/t21
 L4T_ROOTFS_SHA512 = "15075b90d2e6f981e40e7fdd5b02fc1e3bbf89876a6604e61b77771519bf3970308ee921bb39957158153ba8597a31b504f5d77c205c0a0c2d3b483aee9f0d4f"
 UBUNTU_BASE_URL = "http://cdimage.ubuntu.com/ubuntu-base/releases/18.04.3/release/ubuntu-base-18.04.3-base-arm64.tar.gz"
 UBUNTU_BASE_SHA_256 = "9193fd5f648e12c2102326ee6fdc69ac59c490fac3eb050758cee01927612021"
+JETSON_OTA_KEY_SHA512 = '580d5fe3c8d956aa0ee02c93093c51ab5f6f64ad28a68472cc32e481be02dbc952ff4a262afd4f21596d8e8e2fd493131a9ee158a70e49d9500039a316c7cb42'
 NV_SOURCES_LIST = ('etc', 'apt', 'sources.list.d', "nvidia-l4t-apt-source.list")
 NV_SOURCES_LIST_TEMPLATE = """deb https://repo.download.nvidia.com/jetson/common r32 main
 deb https://repo.download.nvidia.com/jetson/{soc} r32 main"""
@@ -38,3 +42,12 @@ deb https://repo.download.nvidia.com/jetson/{soc} r32 main"""
 BOARD_ID_TO_SOC = {
     tegrity.db.NANO_DEV_ID: 't210'
 }
+
+
+def in_docker():
+    if os.path.isfile('/.dockerenv'):
+        return True
+    return False
+
+
+IN_DOCKER = in_docker()

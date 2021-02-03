@@ -151,7 +151,7 @@ def ensure(cross_prefix=None) -> str:
             "one, either from system apt repositories or the recommended from "
             "releases.linaro.org?"
         )
-        choice = None
+        choice = 0
         while not 1 <= choice <= 2:
             try:
                 choice = int(input(

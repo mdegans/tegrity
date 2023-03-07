@@ -78,7 +78,7 @@ def make_image(l4t_path: os.PathLike,
                 f"or {os.path.join(*JETSON_DISK_IMAGE_CREATOR)} in "
                 f"{l4t_path}.")
     else:
-        raise NotImplemented(
+        raise NotImplementedError(
             "only Jetson Nano Development version implemented so far")
 
     logger.info(
